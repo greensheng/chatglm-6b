@@ -46,27 +46,7 @@ response, history = model.chat(tokenizer, query, history=history)
 print(history)
 ```
 
-关于更多的使用说明，以及如何运行命令行和网页版本的 DEMO，请参考我们的 [Github repo](https://github.com/THUDM/ChatGLM-6B)。
-
-## 模型量化
-
-默认情况下，模型以 FP16 精度加载，运行上述代码需要大概 19GB 显存。如果你的 GPU 显存有限，可以尝试运行量化后的模型，即将下述代码
-
-```python
-model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).half().cuda()
-```
-
-替换为（8-bit 量化）
-```python
-model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).half().quantize(8).cuda()
-```
-
-或者（4-bit 量化）
-```python
-model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).half().quantize(4).cuda()
-```
-
-进行 2 至 3 轮对话后，8-bit 量化下约占用 10GB 的 GPU 显存，4-bit 量化仅需占用 6GB 的 GPU 显存。随着对话轮数的增多，对应消耗显存也随之增长。
+关于更多的使用说明，包括如何运行命令行和网页版本的 DEMO，以及使用模型量化以节省显存，请参考我们的 [Github repo](https://github.com/THUDM/ChatGLM-6B)。
 
 ## 引用
 
