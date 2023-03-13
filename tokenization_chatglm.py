@@ -15,8 +15,6 @@ from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
-VOCAB_FILES_NAMES = {"vocab_file": "ice_text.model"}
-
 PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES = {
     "THUDM/chatglm-6b": 2048,
 }
@@ -179,7 +177,7 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             Path to the vocabulary file.
     """
 
-    vocab_files_names = VOCAB_FILES_NAMES
+    vocab_files_names = {"vocab_file": "ice_text.model"}
     max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
     model_input_names = ["input_ids"]
 
