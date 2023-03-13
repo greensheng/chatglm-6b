@@ -14,7 +14,7 @@ ChatGLM-6B 是一个开源的、支持中英双语问答和对话的预训练语
 ## 软件依赖
 
 ```shell
-pip install "transformers>=4.23.1,icetk,cpm_kernels"
+pip install "transformers==4.26.1,icetk,cpm_kernels"
 ```
 
 ## 代码调用 
