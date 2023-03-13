@@ -48,7 +48,7 @@ print(history)
 
 关于更多的使用说明，以及如何运行命令行和网页版本的 DEMO，请参考我们的 [Github repo](https://github.com/THUDM/ChatGLM-6B)。
 
-## INT8 量化
+## 模型量化
 
 默认情况下，模型以 FP16 精度加载，运行上述代码需要大概 19GB 显存。如果你的 GPU 显存有限，可以尝试运行量化后的模型，即将下述代码
 
