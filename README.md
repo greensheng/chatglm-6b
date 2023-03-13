@@ -9,16 +9,23 @@ tags:
 ---
 # ChatGLM-6B
 ## 介绍
-ChatGLM-6B 是一个开源的、支持中英双语问答和对话的预训练语言模型，基于 [GLM](https://github.com/THUDM/GLM) 架构，具有 62 亿参数。ChatGLM-6B 使用了和 ChatGLM（内测中，地址 [https://chatglm.cn](https://chatglm.cn)）相同的技术面向中文问答和对话进行优化。
+ChatGLM-6B 是一个开源的、支持中英双语问答和对话的预训练语言模型，基于 [General Language Model (GLM)](https://github.com/THUDM/GLM) 架构，具有 62 亿参数。ChatGLM-6B 使用了和 ChatGLM（内测中，地址 [https://chatglm.cn](https://chatglm.cn)）相同的技术面向中文问答和对话进行优化。结合 INT4 量化技术，用户可以在消费级的显卡上进行本地部署（最低只需 6GB 显存）。在经过了约 1T tokens 中英双语训练，并辅以监督微调、反馈自助、人类反馈强化学习等技术的加持，62 亿参数的模型已经能生成相当符合人类偏好的回答。
 
-## 使用方式
-使用前请先安装`transformers>=4.23.1`和`icetk`。
+## 硬件需求
+
+| **量化等级**    | **最低 GPU 显存** |
+| -------------- | ----------------- |
+| FP16（无量化）   | 19 GB             |
+| INT8           | 10 GB              |
+| INT4           | 6 GB               |
+
+## 软件依赖
 
 ```shell
-pip install "transformers>=4.23.1,icetk"
+pip install "transformers>=4.23.1,icetk,cpm_kernels"
 ```
 
-### 代码调用 
+## 代码调用 
 
 可以通过如下代码调用 ChatGLM-6B 模型来生成对话。
 
@@ -39,10 +46,11 @@ response, history = model.chat(tokenizer, query, history=history)
 print(history)
 ```
 
-关于更多的使用说明，以及如何运行命令行和Web版本的demo，请参考我们的[Github repo](https://github.com/THUDM/ChatGLM-6B)。
+关于更多的使用说明，以及如何运行命令行和网页版本的 DEMO，请参考我们的 [Github repo](https://github.com/THUDM/ChatGLM-6B)。
 
 ## INT8 量化
-默认情况下，模型以 FP16 精度加载，运行上述代码需要大概 13GB 显存。如果你的 GPU 显存有限，可以尝试使用 `transformers` 提供的 8bit 量化功能，即将代码中的
+
+默认情况下，模型以 FP16 精度加载，运行上述代码需要大概 19GB 显存。如果你的 GPU 显存有限，可以尝试运行量化后的模型，即将下述代码
 
 ```python
 model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).half().cuda()
@@ -54,7 +62,7 @@ model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).ha
 model = AutoModel.from_pretrained("THUDM/chatglm-6b", device_map="auto", load_in_8bit=True, trust_remote_code=True)
 ```
 
-使用 8-bit 量化之后大约需要 9.5GB 的 GPU 显存。
+进行 2 至 3 轮对话后，8-bit 量化下约占用 10GB 的 GPU 显存，4-bit 量化仅需占用 6GB 的 GPU 显存。随着对话轮数的增多，对应消耗显存也随之增长。
 
 ## 引用
 
