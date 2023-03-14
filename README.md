@@ -44,6 +44,10 @@ pip install "transformers>=4.23.1,icetk,cpm_kernels"
 
 关于更多的使用说明，包括如何运行命令行和网页版本的 DEMO，以及使用模型量化以节省显存，请参考我们的 [Github Repo](https://github.com/THUDM/ChatGLM-6B)。
 
+## 协议
+
+本仓库的代码依照 [Apache-2.0](blob/main/LICENSE) 协议开源，ChatGLM-6B 模型的权重的使用则需要遵循 [Model License](blob/main/MODEL_LICENSE)。
+
 ## 引用
 
 如果你觉得我们的工作有帮助的话，请考虑引用下列论文：
