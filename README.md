@@ -46,7 +46,7 @@ pip install "transformers>=4.23.1,icetk,cpm_kernels"
 
 ## 协议
 
-本仓库的代码依照 [Apache-2.0](blob/main/LICENSE) 协议开源，ChatGLM-6B 模型的权重的使用则需要遵循 [Model License](blob/main/MODEL_LICENSE)。
+本仓库的代码依照 [Apache-2.0](LICENSE) 协议开源，ChatGLM-6B 模型的权重的使用则需要遵循 [Model License](MODEL_LICENSE)。
 
 ## 引用
 
