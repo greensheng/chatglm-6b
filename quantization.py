@@ -7,7 +7,11 @@ import base64
 import ctypes
 
 from typing import List
-from cpm_kernels.kernels.base import LazyKernelCModule, KernelFunction, round_up
+
+try:
+    from cpm_kernels.kernels.base import LazyKernelCModule, KernelFunction, round_up
+except:
+    pass
 
 
 class W8A16Linear(torch.autograd.Function):
