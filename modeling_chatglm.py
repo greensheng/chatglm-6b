@@ -610,7 +610,7 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
     a simple interface for downloading and loading pretrained models.
     """
 
-    is_parallelizable = True
+    is_parallelizable = False
     supports_gradient_checkpointing = False
     config_class = ChatGLMConfig
     base_model_prefix = "transformer"
