@@ -1165,31 +1165,58 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         return torch.tensor(return_seqs, dtype=torch.long, device=kwargs['input_ids'].device)
 
-    def quantize(self, bits: int, quantize_embeddings=False):
+    def quantize(self, bits: int, quantize_embeddings=False, **kwargs):
         from .quantization import quantize, QuantizedEmbedding, QuantizedLinear
 
-        self.transformer = quantize(self.transformer, bits)
+        self.transformer = quantize(self.transformer, bits, **kwargs)
         if quantize_embeddings:
-            self.transformer.word_embeddings = QuantizedEmbedding(
-                weight_bit_width=bits,
-                weight_tensor=self.transformer.word_embeddings.weight.to(torch.cuda.current_device()),
-                num_embeddings=self.transformer.word_embeddings.num_embeddings,
-                embedding_dim=self.transformer.word_embeddings.embedding_dim,
-                dtype=torch.half,
-                device=self.transformer.word_embeddings.weight.device,
-            )
+            if self.device == torch.device("cpu"):
+                from .quantization import QuantizedEmbeddingCPU, QuantizedLinearCPU
 
-            self.lm_head =  QuantizedLinear(
-                weight_bit_width=bits,
-                weight_tensor=self.lm_head.weight.to(torch.cuda.current_device()),
-                bias_tensor=None,
-                in_features=self.lm_head.in_features,
-                out_features=self.lm_head.out_features,
-                bias=False,
-                quantized_weight=self.transformer.word_embeddings.weight,
-                quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
-                dtype=torch.half,
-                device=self.lm_head.weight.device,
-            )
+                self.transformer.word_embeddings = QuantizedEmbeddingCPU(
+                    weight_bit_width=bits,
+                    weight_tensor=self.transformer.word_embeddings.weight.to(torch.device("cpu")),
+                    num_embeddings=self.transformer.word_embeddings.num_embeddings,
+                    embedding_dim=self.transformer.word_embeddings.embedding_dim,
+                    dtype=torch.float,
+                    device=self.transformer.word_embeddings.weight.device,
+                )
+
+                self.lm_head =  QuantizedLinearCPU(
+                    weight_bit_width=bits,
+                    weight_tensor=self.lm_head.weight.to(torch.device("cpu")),
+                    bias_tensor=None,
+                    in_features=self.lm_head.in_features,
+                    out_features=self.lm_head.out_features,
+                    bias=False,
+                    quantized_weight=self.transformer.word_embeddings.weight,
+                    quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
+                    dtype=torch.float,
+                    device=self.lm_head.weight.device,
+                )
+            else:
+                from .quantization import QuantizedEmbedding, QuantizedLinear
+
+                self.transformer.word_embeddings = QuantizedEmbedding(
+                    weight_bit_width=bits,
+                    weight_tensor=self.transformer.word_embeddings.weight.to(torch.cuda.current_device()),
+                    num_embeddings=self.transformer.word_embeddings.num_embeddings,
+                    embedding_dim=self.transformer.word_embeddings.embedding_dim,
+                    dtype=torch.half,
+                    device=self.transformer.word_embeddings.weight.device,
+                )
+
+                self.lm_head =  QuantizedLinear(
+                    weight_bit_width=bits,
+                    weight_tensor=self.lm_head.weight.to(torch.cuda.current_device()),
+                    bias_tensor=None,
+                    in_features=self.lm_head.in_features,
+                    out_features=self.lm_head.out_features,
+                    bias=False,
+                    quantized_weight=self.transformer.word_embeddings.weight,
+                    quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
+                    dtype=torch.half,
+                    device=self.lm_head.weight.device,
+                )
 
         return self
