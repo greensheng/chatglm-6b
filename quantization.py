@@ -1,5 +1,6 @@
-from torch.nn import Linear
+from torch.nn import Linear, Embedding
 from torch.nn.parameter import Parameter
+import torch.nn.functional as F
 
 import bz2
 import torch
@@ -111,32 +112,77 @@ def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, sourc
 
 
 class QuantizedLinear(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
         super(QuantizedLinear, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
 
-        shape = self.weight.shape
-        del self.weight
-
-        if weight_tensor is None:
-            self.weight = torch.empty(
-                shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
-            )
-            self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+        if (quantized_weight is not None) and (quantized_weight_scale is not None):
+            del self.weight
+            self.weight = Parameter(quantized_weight.to(kwargs["device"]), requires_grad=False)
+            self.weight_scale = Parameter(quantized_weight_scale.to(kwargs["device"]), requires_grad=False)
         else:
-            self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
-            self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
-            if weight_bit_width == 4:
-                self.weight = compress_int4_weight(self.weight)
+            shape = self.weight.shape
+            del self.weight
 
-        self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-        self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
-        self.bias = Parameter(bias_tensor.to(kwargs["device"]), requires_grad=False)
+            if weight_tensor is None:
+                self.weight = torch.empty(
+                    shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
+                )
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+            else:
+                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
+                self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
+                if weight_bit_width == 4:
+                    self.weight = compress_int4_weight(self.weight)
+
+            self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
+            self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
+
+        if bias_tensor is not None:
+            self.bias = Parameter(bias_tensor.to(kwargs["device"]), requires_grad=False)
+        else:
+            self.bias = None
 
     def forward(self, input):
         output = W8A16Linear.apply(input, self.weight, self.weight_scale, self.weight_bit_width)
         if self.bias is not None:
             output = output + self.bias
+        return output
+
+
+class QuantizedEmbedding(Embedding):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
+        super(QuantizedEmbedding, self).__init__(*args, **kwargs)
+        self.weight_bit_width = weight_bit_width
+
+        if (quantized_weight is not None) and (quantized_weight_scale is not None):
+            del self.weight
+            self.weight = Parameter(quantized_weight.to(kwargs["device"]), requires_grad=False)
+            self.weight_scale = Parameter(quantized_weight_scale.to(kwargs["device"]), requires_grad=False)
+        else:
+            shape = self.weight.shape
+            del self.weight
+
+            if weight_tensor is None:
+                self.weight = torch.empty(
+                    shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
+                )
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+            else:
+                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
+                self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
+                if weight_bit_width == 4:
+                    self.weight = compress_int4_weight(self.weight)
+
+            self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
+            self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
+
+    def forward(self, input):
+        original_weight = extract_weight_to_half(weight=self.weight, scale_list=self.weight_scale, source_bit_width=self.weight_bit_width)
+        output = F.embedding(
+            input, original_weight, self.padding_idx, self.max_norm,
+            self.norm_type, self.scale_grad_by_freq, self.sparse
+        )
         return output
 
 

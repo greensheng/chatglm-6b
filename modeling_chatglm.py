@@ -51,7 +51,7 @@ class InvalidScoreLogitsProcessor(LogitsProcessor):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         if torch.isnan(scores).any() or torch.isinf(scores).any():
             scores.zero_()
-            scores[..., 20005] = 1e5
+            scores[..., 20005] = 5e4
         return scores
 
 
@@ -1165,7 +1165,31 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         return torch.tensor(return_seqs, dtype=torch.long, device=kwargs['input_ids'].device)
 
-    def quantize(self, bits: int):
-        from .quantization import quantize
+    def quantize(self, bits: int, quantize_embeddings=False):
+        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear
+
         self.transformer = quantize(self.transformer, bits)
+        if quantize_embeddings:
+            self.transformer.word_embeddings = QuantizedEmbedding(
+                weight_bit_width=bits,
+                weight_tensor=self.transformer.word_embeddings.weight.to(torch.cuda.current_device()),
+                num_embeddings=self.transformer.word_embeddings.num_embeddings,
+                embedding_dim=self.transformer.word_embeddings.embedding_dim,
+                dtype=torch.half,
+                device=self.transformer.word_embeddings.weight.device,
+            )
+
+            self.lm_head =  QuantizedLinear(
+                weight_bit_width=bits,
+                weight_tensor=self.lm_head.weight.to(torch.cuda.current_device()),
+                bias_tensor=None,
+                in_features=self.lm_head.in_features,
+                out_features=self.lm_head.out_features,
+                bias=False,
+                quantized_weight=self.transformer.word_embeddings.weight,
+                quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
+                dtype=torch.half,
+                device=self.lm_head.weight.device,
+            )
+
         return self
