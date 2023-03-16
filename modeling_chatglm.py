@@ -1178,10 +1178,10 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         if self.quantized:
             if self.device == torch.device("cpu"):
-                print("Already quantized, reloading cpu kernel.")
+                logger.info("Already quantized, reloading cpu kernel.")
                 load_cpu_kernel(**kwargs)
             else:
-                print("Already quantized.")
+                logger.info("Already quantized.")
             return self
 
         self.quantized = True
@@ -1191,7 +1191,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         self.transformer = quantize(self.transformer, bits, use_quantization_cache=use_quantization_cache, empty_init=empty_init, **kwargs)
         if quantize_embeddings:
-            print("Applying quantization to embeddings")
+            logger.info("Applying quantization to embeddings")
             if self.device == torch.device("cpu"):
                 self.transformer.word_embeddings = QuantizedEmbeddingCPU(
                     weight_bit_width=bits,
