@@ -72,11 +72,12 @@ default_cpu_parallel_kernel_code = os.path.join(os.path.dirname(os.path.abspath(
 # compile parallel kernel: gcc -O3 -pthread -fopenmp <source_code> -shared -o <kernel_file>
 
 class CPUKernel:
-    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code, compile_parallel_kernel=False):
+    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code, compile_parallel_kernel=False, parallel_num=None):
         self.load =False
         self.int8WeightExtractionFloat = None
         self.int4WeightExtractionFloat = None
         self.int4WeightCompression = None
+        self.SetNumThreads = None
 
         if compile_parallel_kernel and source_code == default_cpu_kernel_code:
             source_code = default_cpu_parallel_kernel_code
@@ -103,10 +104,22 @@ class CPUKernel:
             self.int8WeightExtractionFloat = kernels.extract_int8_weight_to_float
             self.int4WeightExtractionFloat = kernels.extract_int4_weight_to_float
             self.int4WeightCompression = kernels.compress_int4_weight
+            self.SetNumThreads = kernels.set_num_threads
             self.load = True
             print("Load kernel :", kernel_file)
         else:
             print("Failed to load kernel.")
+        
+        if compile_parallel_kernel:
+            if parallel_num is None:
+                parallel_num = max(os.cpu_count() // 2, 1)
+            print("Setting CPU quantization kernel threads to", parallel_num)
+            if parallel_num < 4:
+                print("Parallel kernel is not recommended(parallel num < 4).")
+            self.SetNumThreads(parallel_num)
+        
+        self.parallel_num = parallel_num
+            
 
 cpu_kernels = None
 
@@ -408,7 +421,7 @@ def quantize(model, weight_bit_width, use_quantization_cache=False, **kwargs):
         current_device = torch.cuda.current_device()
         dtype = torch.half
 
-    print("Applying quantization")
+    print("Applying quantization to glm layers")
 
     for layer in model.layers:
         layer.attention.query_key_value = QuantizedLinearAuto(

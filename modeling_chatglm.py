@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn import CrossEntropyLoss, LayerNorm
 from torch.nn.utils import skip_init
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union, List, Callable
 
 from transformers.utils import (
     add_code_sample_docstrings,
@@ -927,6 +927,9 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             dtype=torch.half
         )
 
+        self.quantization = False
+        self.quantize_embeddings = False
+
     def get_output_embeddings(self):
         return self.lm_head
 
@@ -1168,8 +1171,12 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
     def quantize(self, bits: int, quantize_embeddings=False, **kwargs):
         from .quantization import quantize, QuantizedEmbedding, QuantizedLinear
 
+        self.quantization = True
+        self.quantize_embeddings = quantize_embeddings
+
         self.transformer = quantize(self.transformer, bits, **kwargs)
         if quantize_embeddings:
+            print("Applying quantization to embeddings")
             if self.device == torch.device("cpu"):
                 from .quantization import QuantizedEmbeddingCPU, QuantizedLinearCPU
 

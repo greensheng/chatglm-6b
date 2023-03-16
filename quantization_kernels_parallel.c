@@ -1,10 +1,18 @@
 #include <omp.h>
 
-#define NUN_THREADS 8
+void set_num_threads(int n_threads)
+{
+    omp_set_num_threads(n_threads);
+}
+
+int get_num_threads()
+{
+    return omp_get_num_threads();
+}
 
 void compress_int4_weight(void *weight, void *out, int n, int m)
 {
-    #pragma omp parallel for num_threads(NUN_THREADS)
+    #pragma omp parallel for
 	for(int i=0;i<n;i++)
     {
         for(int j=0;j<m;j++)
@@ -17,7 +25,7 @@ void compress_int4_weight(void *weight, void *out, int n, int m)
 
 void extract_int8_weight_to_float(void *weight, void *scale_list, void *out, int n, int m)
 {
-    #pragma omp parallel for num_threads(NUN_THREADS)
+    #pragma omp parallel for
 	for(int i=0;i<n;i++)
     {
         for(int j=0;j<m;j++)
@@ -27,7 +35,7 @@ void extract_int8_weight_to_float(void *weight, void *scale_list, void *out, int
 
 void extract_int4_weight_to_float(void *weight, void *scale_list, void *out, int n, int m)
 {
-    #pragma omp parallel for num_threads(NUN_THREADS)
+    #pragma omp parallel for
 	for(int i=0;i<n;i++)
     {
         for(int j=0;j<m;j++)
