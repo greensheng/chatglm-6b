@@ -67,21 +67,30 @@ class Kernel:
         for name in self._function_names:
             setattr(self, name, KernelFunction(self._cmodule, name))
 
-default_cpu_kernel_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./quantization_kernels.c")
+default_cpu_kernel_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels.c")
+default_cpu_parallel_kernel_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels_parallel.c")
+# compile parallel kernel: gcc -O3 -pthread -fopenmp <source_code> -shared -o <kernel_file>
 
 class CPUKernel:
-    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code):
+    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code, compile_parallel_kernel=False):
         self.load =False
         self.int8WeightExtractionFloat = None
         self.int4WeightExtractionFloat = None
         self.int4WeightCompression = None
+
+        if compile_parallel_kernel and source_code == default_cpu_kernel_code:
+            source_code = default_cpu_parallel_kernel_code
+
         if (not kernel_file) or (not os.path.exists(kernel_file)):
             print("No compiled kernel found.")
             try:
                 if os.path.exists(source_code):
                     print("Compiling kernels :", source_code)
                     kernel_file = source_code[:-2] + ".so"
-                    os.system("gcc -O3 -fPIC {} -shared -o {}".format(source_code, kernel_file))
+                    if compile_parallel_kernel:
+                        os.system("gcc -O3 -pthread -fopenmp {} -shared -o {}".format(source_code, kernel_file))
+                    else:
+                        os.system("gcc -O3 -fPIC {} -shared -o {}".format(source_code, kernel_file))
                     print("Kernels compiled:", kernel_file)
                 else:
                     print("Kernel source code not found.")
@@ -95,6 +104,7 @@ class CPUKernel:
             self.int4WeightExtractionFloat = kernels.extract_int4_weight_to_float
             self.int4WeightCompression = kernels.compress_int4_weight
             self.load = True
+            print("Load kernel :", kernel_file)
         else:
             print("Failed to load kernel.")
 
