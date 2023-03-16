@@ -929,12 +929,14 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             dtype=torch.half
         )
 
-        self.quantization_bit = config.quantization_bit
-        self.quantize_embeddings = config.quantization_embeddings
+        self.config = config
+
+        self.config.quantization_bit = config.quantization_bit
+        self.config.quantization_embeddings = config.quantization_embeddings
         self.quantized = False
 
-        if self.quantization_bit:
-            self.quantize(self.quantization_bit, self.quantize_embeddings, use_quantization_cache=True, empty_init=True)
+        if self.config.quantization_bit:
+            self.quantize(self.config.quantization_bit, self.config.quantization_embeddings, use_quantization_cache=True, empty_init=True)
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -1186,8 +1188,8 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         self.quantized = True
 
-        self.quantization_bit = bits
-        self.quantize_embeddings = quantize_embeddings
+        self.config.quantization_bit = bits
+        self.config.quantization_embeddings = quantize_embeddings
 
         self.transformer = quantize(self.transformer, bits, use_quantization_cache=use_quantization_cache, empty_init=empty_init, **kwargs)
         if quantize_embeddings:
