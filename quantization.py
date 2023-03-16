@@ -256,7 +256,7 @@ class QuantizedLinear(Linear):
         self.weight_bit_width = weight_bit_width
         
         if quantization_cache is not None:
-            print("QuantizedLinear for CUDA do not support out cache.")
+            print("QuantizedLinear for CUDA do not support quantization cache.")
 
         if (quantized_weight is not None) and (quantized_weight_scale is not None):
             del self.weight
