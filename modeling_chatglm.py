@@ -30,7 +30,6 @@ from transformers.generation.utils import LogitsProcessorList
 
 from .configuration_chatglm import ChatGLMConfig
 
-from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, QuantizedEmbeddingCPU, QuantizedLinearCPU, load_cpu_kernel
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -931,8 +930,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         self.config = config
 
-        self.config.quantization_bit = config.quantization_bit
-        self.config.quantization_embeddings = config.quantization_embeddings
         self.quantized = False
 
         if self.config.quantization_bit:
@@ -1177,6 +1174,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         return torch.tensor(return_seqs, dtype=torch.long, device=kwargs['input_ids'].device)
 
     def quantize(self, bits: int, quantize_embeddings=False, use_quantization_cache=False, empty_init=False, **kwargs):
+        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, QuantizedEmbeddingCPU, QuantizedLinearCPU, load_cpu_kernel
 
         if self.quantized:
             if self.device == torch.device("cpu"):
