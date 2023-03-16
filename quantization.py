@@ -37,13 +37,13 @@ class W8A16Linear(torch.autograd.Function):
 
 class W8A16LinearCPU(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inp: torch.Tensor, quant_w: torch.Tensor, scale_w: torch.Tensor, weight_bit_width):
+    def forward(ctx, inp: torch.Tensor, quant_w: torch.Tensor, scale_w: torch.Tensor, weight_bit_width, quantization_cache=None):
         ctx.inp_shape = inp.size()
         ctx.weight_shape = quant_w.size()
         ctx.weight_bit_width = weight_bit_width
         out_features = quant_w.size(0)
         inp = inp.contiguous().view(-1, inp.size(-1))
-        weight = extract_weight_to_float(quant_w, scale_w, weight_bit_width)
+        weight = extract_weight_to_float(quant_w, scale_w, weight_bit_width, quantization_cache=quantization_cache)
         output = inp.mm(weight.t())
         ctx.save_for_backward(inp, quant_w, scale_w)
         return output.view(*(ctx.inp_shape[:-1] + (out_features,)))
@@ -91,7 +91,7 @@ class CPUKernel:
                         os.system("gcc -O3 -pthread -fopenmp {} -shared -o {}".format(source_code, kernel_file))
                     else:
                         os.system("gcc -O3 -fPIC {} -shared -o {}".format(source_code, kernel_file))
-                    print("Kernels compiled:", kernel_file)
+                    print("Kernels compiled :", kernel_file)
                 else:
                     print("Kernel source code not found.")
                     return
@@ -192,7 +192,7 @@ def extract_weight_to_half(weight: torch.Tensor, scale_list: torch.Tensor, sourc
         return out
 
 
-def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, source_bit_width: int):
+def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, source_bit_width: int, quantization_cache=None):
     """extract weight on cpu to float32"""
     if source_bit_width == 8:
         func = cpu_kernels.int8WeightExtractionFloat
@@ -202,7 +202,11 @@ def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, sour
         assert False, "Unsupported bit-width"
 
     n, m = weight.size(0), weight.size(1)
-    out = torch.empty(n, m * (8 // source_bit_width), dtype=torch.float, device="cpu")
+
+    if quantization_cache is not None:
+        out = quantization_cache
+    else:
+        out = torch.empty(n, m * (8 // source_bit_width), dtype=torch.float, device="cpu")
 
     func(
         ctypes.c_void_p(weight.data_ptr()),
@@ -215,9 +219,12 @@ def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, sour
 
 
 class QuantizedLinear(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, *args, **kwargs):
         super(QuantizedLinear, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
+        
+        if quantization_cache is not None:
+            print("QuantizedLinear for CUDA do not support out cache.")
 
         if (quantized_weight is not None) and (quantized_weight_scale is not None):
             del self.weight
@@ -254,9 +261,10 @@ class QuantizedLinear(Linear):
 
 
 class QuantizedLinearCPU(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, *args, **kwargs):
         super(QuantizedLinearCPU, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
+        self.quantization_cache = quantization_cache
 
         if (quantized_weight is not None) and (quantized_weight_scale is not None):
             del self.weight
@@ -286,7 +294,7 @@ class QuantizedLinearCPU(Linear):
             self.bias = None
 
     def forward(self, input):
-        output = W8A16LinearCPU.apply(input, self.weight, self.weight_scale, self.weight_bit_width)
+        output = W8A16LinearCPU.apply(input, self.weight, self.weight_scale, self.weight_bit_width, self.quantization_cache)
         if self.bias is not None:
             output = output + self.bias
         return output
@@ -364,19 +372,43 @@ class QuantizedEmbeddingCPU(Embedding):
         return output
 
 
-def quantize(model, weight_bit_width, **kwargs):
+def quantize(model, weight_bit_width, use_quantization_cache=False, **kwargs):
     """Replace fp16 linear with quantized linear"""
     global cpu_kernels
+    
+    query_key_value_quantization_cache = None
+    dense_quantization_cache = None
+    dense_h_to_4h_quantization_cache = None
+    dense_4h_to_h_quantization_cache = None
+
     if model.device == torch.device("cpu"):
         cpu_kernels = CPUKernel(**kwargs)
         assert cpu_kernels.load
         QuantizedLinearAuto = QuantizedLinearCPU
         current_device = torch.device("cpu")
         dtype = torch.float
+        if use_quantization_cache:
+            print("Using quantization cache")
+            layer = model.layers[0]
+            weight = layer.attention.query_key_value.weight
+            n, m = weight.size(0), weight.size(1)
+            query_key_value_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
+            weight = layer.attention.dense.weight
+            n, m = weight.size(0), weight.size(1)
+            dense_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
+            weight = layer.mlp.dense_h_to_4h.weight
+            n, m = weight.size(0), weight.size(1)
+            dense_h_to_4h_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
+            weight = layer.mlp.dense_4h_to_h.weight
+            n, m = weight.size(0), weight.size(1)
+            dense_4h_to_h_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
+
     else:
         QuantizedLinearAuto = QuantizedLinear
         current_device = torch.cuda.current_device()
         dtype = torch.half
+
+    print("Applying quantization")
 
     for layer in model.layers:
         layer.attention.query_key_value = QuantizedLinearAuto(
@@ -388,6 +420,7 @@ def quantize(model, weight_bit_width, **kwargs):
             bias=True,
             dtype=dtype,
             device=layer.attention.query_key_value.weight.device,
+            quantization_cache=query_key_value_quantization_cache
         )
         layer.attention.dense = QuantizedLinearAuto(
             weight_bit_width=weight_bit_width,
@@ -398,6 +431,7 @@ def quantize(model, weight_bit_width, **kwargs):
             bias=True,
             dtype=dtype,
             device=layer.attention.dense.weight.device,
+            quantization_cache=dense_quantization_cache
         )
         layer.mlp.dense_h_to_4h = QuantizedLinearAuto(
             weight_bit_width=weight_bit_width,
@@ -408,6 +442,7 @@ def quantize(model, weight_bit_width, **kwargs):
             bias=True,
             dtype=dtype,
             device=layer.mlp.dense_h_to_4h.weight.device,
+            quantization_cache=dense_h_to_4h_quantization_cache
         )
         layer.mlp.dense_4h_to_h = QuantizedLinearAuto(
             weight_bit_width=weight_bit_width,
@@ -418,5 +453,6 @@ def quantize(model, weight_bit_width, **kwargs):
             bias=True,
             dtype=dtype,
             device=layer.mlp.dense_4h_to_h.weight.device,
+            quantization_cache=dense_4h_to_h_quantization_cache
         )
     return model
