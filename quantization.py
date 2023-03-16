@@ -67,20 +67,31 @@ class Kernel:
         for name in self._function_names:
             setattr(self, name, KernelFunction(self._cmodule, name))
 
-default_cpu_kernel_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels.c")
-default_cpu_parallel_kernel_code = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels_parallel.c")
-# compile parallel kernel: gcc -O3 -pthread -fopenmp <source_code> -shared -o <kernel_file>
+default_cpu_kernel_code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels.c")
+default_cpu_kernel_code = "QlpoOTFBWSZTWXLbSoQAAgzbgERwQXxmTwAAr/ff3kABt0Q2oRVT0hpo9RtEAAAAyBEiSQ9EGjQGQAAAwANGhowjJoNGmgMEUplMTNSMJ5TQaDJpsoMyRMj8P4mZzFSVVwqSXG8GG7MlVwiToYEQwVD7noBxMhNfkeZYtYFtbgOBUSIGtIQjhNHCEnPJsadhb3yBmRIOD3TeAtNLSaU5GgvKUBWSNuuOIHmVt0YhW6rsmDMDUjeUJGJ64R1Jm5lrh0Aa0tKjhFwPdWcGogxLDSXPWQUWTM8Sd3Qz1HMYNxx3HMeiNqNo4jeRDEfZ3gUSHIcU/heomq0vEzL1Msz5KKGxH8FrNOYw3KaxdqaEmNHYMxJFgQbR0DyRknL2L4kwUSxKRdhjRpEtUqilVfggFL1klaMS3PPRDfNqbBOPWO7m4JTVGhS9QTBDDJaEbLbrUQNB+IpJSKQbG5SZZ5gkwJEhJ3aYKJipZ/i7kinChIOW2lQg"
+default_cpu_parallel_kernel_code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels_parallel.c")
+default_cpu_parallel_kernel_code = "QlpoOTFBWSZTWZzWK2UAALXbgERwSX1mTwAAr/ff3kACNyXSbZYwBpoaNGIyAaADQwRRFT/UKDINANqAD1NABFQlPUzaaJHppGRmoAG01ARKKaaMp4gmgaNAaDQDIKVKfZ/g6v1Kem5ZsWZmZtSXS5ZwRAzKmjr1E1lKMEoQNCPkEYPACgcR5I9w/0k6JrJYHqFuHnChcD7N+DHeOQ0ajF83Tc40jgmQbOB5wt3TEHyTObDBLoxrJGBuJmNbxYZwAoKTjbIcI7GsbuVRERAR8wqwhXQjQOxiHQlgSnHjQjddXERojNmQYJJVoM2xxawMeI9asi6E1rfd7GO8S0S5vacCNGry4F1nyZbcTvSBXEMipuPfM7i0Y8kjirpbxb05jpIQjCGE8DYBNCAZyHz9EoOpDRST/I1aFCNpcjoXgyc3NjVsUvYIaYq7xopYJqcxg2g4qXofm7AaGNTzJSNguOQw4utKcEl0F1UOgI+T1hk5LusbGZ9udC1CiBeGwwFxR/QdbZDndehRPxyGt3Me1DBW45MXIY24ZD30aFNuSEUdu5LWx1sSJWLGgsmqUIFTgWhU0gfxXpzhghr2AYpV3hE06mGk1I2JyuZiFgkiz/i7kinChITmsVso"
+
+with open(default_cpu_kernel_code_path, "w", encoding="utf-8") as file:
+    code = default_cpu_kernel_code
+    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+    file.write(cpu_quantization_code)
+
+with open(default_cpu_parallel_kernel_code_path, "w", encoding="utf-8") as file:
+    code = default_cpu_parallel_kernel_code
+    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+    file.write(cpu_quantization_code)
 
 class CPUKernel:
-    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code, compile_parallel_kernel=False, parallel_num=None):
+    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code_path, compile_parallel_kernel=False, parallel_num=None):
         self.load =False
         self.int8WeightExtractionFloat = None
         self.int4WeightExtractionFloat = None
         self.int4WeightCompression = None
         self.SetNumThreads = None
 
-        if compile_parallel_kernel and source_code == default_cpu_kernel_code:
-            source_code = default_cpu_parallel_kernel_code
+        if compile_parallel_kernel and source_code == default_cpu_kernel_code_path:
+            source_code = default_cpu_parallel_kernel_code_path
 
         if (not kernel_file) or (not os.path.exists(kernel_file)):
             print("No compiled kernel found.")
@@ -115,7 +126,7 @@ class CPUKernel:
                 parallel_num = max(os.cpu_count() // 2, 1)
             print("Setting CPU quantization kernel threads to", parallel_num)
             if parallel_num < 4:
-                print("Parallel kernel is not recommended(parallel num < 4).")
+                print("Parallel kernel is not recommended when parallel num < 4.")
             self.SetNumThreads(parallel_num)
         
         self.parallel_num = parallel_num
