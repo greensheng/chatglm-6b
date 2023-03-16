@@ -9,6 +9,7 @@ import base64
 import ctypes
 
 from typing import List
+from functools import partial
 from cpm_kernels.kernels.base import LazyKernelCModule, KernelFunction, round_up
 
 
@@ -72,23 +73,29 @@ default_cpu_kernel_code = "QlpoOTFBWSZTWXLbSoQAAgzbgERwQXxmTwAAr/ff3kABt0Q2oRVT0
 default_cpu_parallel_kernel_code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels_parallel.c")
 default_cpu_parallel_kernel_code = "QlpoOTFBWSZTWZzWK2UAALXbgERwSX1mTwAAr/ff3kACNyXSbZYwBpoaNGIyAaADQwRRFT/UKDINANqAD1NABFQlPUzaaJHppGRmoAG01ARKKaaMp4gmgaNAaDQDIKVKfZ/g6v1Kem5ZsWZmZtSXS5ZwRAzKmjr1E1lKMEoQNCPkEYPACgcR5I9w/0k6JrJYHqFuHnChcD7N+DHeOQ0ajF83Tc40jgmQbOB5wt3TEHyTObDBLoxrJGBuJmNbxYZwAoKTjbIcI7GsbuVRERAR8wqwhXQjQOxiHQlgSnHjQjddXERojNmQYJJVoM2xxawMeI9asi6E1rfd7GO8S0S5vacCNGry4F1nyZbcTvSBXEMipuPfM7i0Y8kjirpbxb05jpIQjCGE8DYBNCAZyHz9EoOpDRST/I1aFCNpcjoXgyc3NjVsUvYIaYq7xopYJqcxg2g4qXofm7AaGNTzJSNguOQw4utKcEl0F1UOgI+T1hk5LusbGZ9udC1CiBeGwwFxR/QdbZDndehRPxyGt3Me1DBW45MXIY24ZD30aFNuSEUdu5LWx1sSJWLGgsmqUIFTgWhU0gfxXpzhghr2AYpV3hE06mGk1I2JyuZiFgkiz/i7kinChITmsVso"
 
-with open(default_cpu_kernel_code_path, "w", encoding="utf-8") as file:
-    code = default_cpu_kernel_code
-    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
-    file.write(cpu_quantization_code)
+try:
+    with open(default_cpu_kernel_code_path, "w", encoding="utf-8") as file:
+        code = default_cpu_kernel_code
+        cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+        file.write(cpu_quantization_code)
 
-with open(default_cpu_parallel_kernel_code_path, "w", encoding="utf-8") as file:
-    code = default_cpu_parallel_kernel_code
-    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
-    file.write(cpu_quantization_code)
+    with open(default_cpu_parallel_kernel_code_path, "w", encoding="utf-8") as file:
+        code = default_cpu_parallel_kernel_code
+        cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+        file.write(cpu_quantization_code)
+except Exception as ex:
+    print("Error when generating default cpu kernel code(can be ignored when using custom kernels).")
 
 class CPUKernel:
-    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code_path, compile_parallel_kernel=False, parallel_num=None):
+    def __init__(self, kernel_file="", source_code=default_cpu_kernel_code_path, compile_parallel_kernel=None, parallel_num=None):
         self.load =False
         self.int8WeightExtractionFloat = None
         self.int4WeightExtractionFloat = None
         self.int4WeightCompression = None
         self.SetNumThreads = None
+
+        if compile_parallel_kernel is None:
+            compile_parallel_kernel = bool(int(os.cpu_count()) >= 4)
 
         if compile_parallel_kernel and source_code == default_cpu_kernel_code_path:
             source_code = default_cpu_parallel_kernel_code_path
@@ -115,7 +122,8 @@ class CPUKernel:
             self.int8WeightExtractionFloat = kernels.extract_int8_weight_to_float
             self.int4WeightExtractionFloat = kernels.extract_int4_weight_to_float
             self.int4WeightCompression = kernels.compress_int4_weight
-            self.SetNumThreads = kernels.set_num_threads
+            if compile_parallel_kernel:
+                self.SetNumThreads = kernels.set_num_threads
             self.load = True
             print("Load kernel :", kernel_file)
         else:
@@ -243,7 +251,7 @@ def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, sour
 
 
 class QuantizedLinear(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, empty_init=False, *args, **kwargs):
         super(QuantizedLinear, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
         
@@ -258,11 +266,11 @@ class QuantizedLinear(Linear):
             shape = self.weight.shape
             del self.weight
 
-            if weight_tensor is None:
+            if weight_tensor is None or empty_init:
                 self.weight = torch.empty(
                     shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
                 )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
                 self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
@@ -285,7 +293,7 @@ class QuantizedLinear(Linear):
 
 
 class QuantizedLinearCPU(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, empty_init=False, *args, **kwargs):
         super(QuantizedLinearCPU, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
         self.quantization_cache = quantization_cache
@@ -298,11 +306,11 @@ class QuantizedLinearCPU(Linear):
             shape = self.weight.shape
             del self.weight
 
-            if weight_tensor is None:
+            if weight_tensor is None or empty_init:
                 self.weight = torch.empty(
                     shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
                 )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
                 self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).float()
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
@@ -323,9 +331,27 @@ class QuantizedLinearCPU(Linear):
             output = output + self.bias
         return output
 
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        """remove quantization_cache when saving"""
+        if "quantization_cache" in self._parameters:
+            quantization_cache = self._parameters.pop("quantization_cache")
+            super()._save_to_state_dict(destination, prefix, keep_vars)
+            self._parameters["quantization_cache"] = quantization_cache
+        else:
+            super()._save_to_state_dict(destination, prefix, keep_vars)
 
-class QuantizedEmbedding(Embedding):  # TODO: backward
-    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        """remove quantization_cache when loading"""
+        if "quantization_cache" in self._parameters:
+            quantization_cache = self._parameters.pop("quantization_cache")
+            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+            self._parameters["quantization_cache"] = quantization_cache
+        else:
+            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+
+
+class QuantizedEmbedding(Embedding):  # TODO: backward, check empty_init
+    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, empty_init=False, *args, **kwargs):
         super(QuantizedEmbedding, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
 
@@ -337,11 +363,11 @@ class QuantizedEmbedding(Embedding):  # TODO: backward
             shape = self.weight.shape
             del self.weight
 
-            if weight_tensor is None:
+            if weight_tensor is None or empty_init:
                 self.weight = torch.empty(
                     shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
                 )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
                 self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
@@ -361,7 +387,7 @@ class QuantizedEmbedding(Embedding):  # TODO: backward
 
 
 class QuantizedEmbeddingCPU(Embedding):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, *args, **kwargs):
+    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, empty_init=False, *args, **kwargs):
         super(QuantizedEmbeddingCPU, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
 
@@ -373,11 +399,11 @@ class QuantizedEmbeddingCPU(Embedding):
             shape = self.weight.shape
             del self.weight
 
-            if weight_tensor is None:
+            if weight_tensor is None or empty_init:
                 self.weight = torch.empty(
                     shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
                 )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["params_dtype"], device=kwargs["device"])
+                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
                 self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).float()
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
@@ -396,9 +422,14 @@ class QuantizedEmbeddingCPU(Embedding):
         return output
 
 
-def quantize(model, weight_bit_width, use_quantization_cache=False, **kwargs):
-    """Replace fp16 linear with quantized linear"""
+def load_cpu_kernel(**kwargs):
     global cpu_kernels
+    cpu_kernels = CPUKernel(**kwargs)
+    assert cpu_kernels.load
+
+
+def quantize(model, weight_bit_width, use_quantization_cache=False, empty_init=False, **kwargs):
+    """Replace fp16 linear with quantized linear"""
     
     query_key_value_quantization_cache = None
     dense_quantization_cache = None
@@ -406,9 +437,8 @@ def quantize(model, weight_bit_width, use_quantization_cache=False, **kwargs):
     dense_4h_to_h_quantization_cache = None
 
     if model.device == torch.device("cpu"):
-        cpu_kernels = CPUKernel(**kwargs)
-        assert cpu_kernels.load
-        QuantizedLinearAuto = QuantizedLinearCPU
+        load_cpu_kernel(**kwargs)
+        QuantizedLinearAuto = partial(QuantizedLinearCPU, empty_init=empty_init)
         current_device = torch.device("cpu")
         dtype = torch.float
         if use_quantization_cache:

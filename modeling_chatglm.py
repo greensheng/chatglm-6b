@@ -30,6 +30,8 @@ from transformers.generation.utils import LogitsProcessorList
 
 from .configuration_chatglm import ChatGLMConfig
 
+from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, QuantizedEmbeddingCPU, QuantizedLinearCPU, load_cpu_kernel
+
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
@@ -907,7 +909,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
 
 
 class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
-    def __init__(self, config):
+    def __init__(self, config: ChatGLMConfig):
         super().__init__(config)
 
         # self.hidden_size = config.hidden_size
@@ -927,8 +929,12 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             dtype=torch.half
         )
 
-        self.quantization = False
-        self.quantize_embeddings = False
+        self.quantization_bit = config.quantization_bit
+        self.quantize_embeddings = config.quantization_embeddings
+        self.quantized = False
+
+        if self.quantization_bit:
+            self.quantize(self.quantization_bit, self.quantize_embeddings, use_quantization_cache=True, empty_init=True)
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -1168,18 +1174,25 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         return torch.tensor(return_seqs, dtype=torch.long, device=kwargs['input_ids'].device)
 
-    def quantize(self, bits: int, quantize_embeddings=False, **kwargs):
-        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear
+    def quantize(self, bits: int, quantize_embeddings=False, use_quantization_cache=False, empty_init=False, **kwargs):
 
-        self.quantization = True
+        if self.quantized:
+            if self.device == torch.device("cpu"):
+                print("Already quantized, reloading cpu kernel.")
+                load_cpu_kernel(**kwargs)
+            else:
+                print("Already quantized.")
+            return self
+
+        self.quantized = True
+
+        self.quantization_bit = bits
         self.quantize_embeddings = quantize_embeddings
 
-        self.transformer = quantize(self.transformer, bits, **kwargs)
+        self.transformer = quantize(self.transformer, bits, use_quantization_cache=use_quantization_cache, empty_init=empty_init, **kwargs)
         if quantize_embeddings:
             print("Applying quantization to embeddings")
             if self.device == torch.device("cpu"):
-                from .quantization import QuantizedEmbeddingCPU, QuantizedLinearCPU
-
                 self.transformer.word_embeddings = QuantizedEmbeddingCPU(
                     weight_bit_width=bits,
                     weight_tensor=self.transformer.word_embeddings.weight.to(torch.device("cpu")),
@@ -1188,7 +1201,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                     dtype=torch.float,
                     device=self.transformer.word_embeddings.weight.device,
                 )
-
                 self.lm_head =  QuantizedLinearCPU(
                     weight_bit_width=bits,
                     weight_tensor=self.lm_head.weight.to(torch.device("cpu")),
@@ -1202,8 +1214,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                     device=self.lm_head.weight.device,
                 )
             else:
-                from .quantization import QuantizedEmbedding, QuantizedLinear
-
                 self.transformer.word_embeddings = QuantizedEmbedding(
                     weight_bit_width=bits,
                     weight_tensor=self.transformer.word_embeddings.weight.to(torch.cuda.current_device()),
