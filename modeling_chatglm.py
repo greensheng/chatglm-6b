@@ -1237,3 +1237,117 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 )
 
         return self
+
+
+class LadderSideTuningLayer(torch.nn.Module):
+    def __init__(self, hidden_size, layer_id=None, bias=True, activation_func=gelu, params_dtype=torch.float):
+        super(LadderSideTuningLayer, self).__init__()
+        self.layer_id = layer_id
+        self.activation_func = activation_func
+        self.hidden_size = hidden_size
+
+        self.dense = torch.nn.Linear(
+            self.hidden_size,
+            self.hidden_size,
+            bias=bias,
+            dtype=params_dtype,
+        )
+
+        torch.nn.init.normal_(self.dense.weight, mean=0,std=1)
+
+    def forward(self, x: torch.Tensor):
+        return self.activation_func(self.dense(x))
+
+
+class ChatGLMForLadderSideTuning(ChatGLMForConditionalGeneration):
+    def __init__(self, config: ChatGLMConfig):
+        super().__init__(config)
+
+        self.lm_head.requires_grad_(False)  # freeze lm head
+
+        self.num_lst_layers = self.transformer.num_layers
+
+        self.lst_hidden_size = self.transformer.hidden_size
+
+        self.lst_alpha = torch.tensor(1e-8, dtype=torch.half, device=self.device)
+
+        self.lst_layers = torch.nn.ModuleList(
+            [LadderSideTuningLayer(hidden_size=self.lst_hidden_size, layer_id=layer_id, params_dtype=torch.half) for layer_id in range(self.num_lst_layers)]
+        )
+
+    def forward(
+            self,
+            input_ids: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
+            inputs_embeds: Optional[torch.Tensor] = None,
+            labels: Optional[torch.Tensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ):
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        with torch.no_grad():  # freeze transformer
+            transformer_outputs = self.transformer(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=True,
+                return_dict=return_dict,
+            )
+
+        # hidden_states = transformer_outputs[0]  # last_hidden_states, won't be used directly in LST.
+
+        all_hidden_states = transformer_outputs.hidden_states
+
+        all_lst_hidden_states = () if output_hidden_states else None
+
+        lst_hidden_states = all_hidden_states[0]
+
+        for layer_id in range(self.transformer.num_layers):
+            if output_hidden_states:
+                all_lst_hidden_states = all_lst_hidden_states + (lst_hidden_states,)
+            lst_hidden_states = self.lst_layers[layer_id](lst_hidden_states)
+            lst_hidden_states = self.lst_alpha * lst_hidden_states + (1 - self.lst_alpha) * all_hidden_states[1 + layer_id]
+
+        if output_hidden_states:
+            all_lst_hidden_states = all_lst_hidden_states + (lst_hidden_states,)
+
+        hidden_states = lst_hidden_states
+
+        lm_logits = self.lm_head(hidden_states).permute(1, 0, 2).contiguous()
+
+        loss = None
+        if labels is not None:
+            lm_logits = lm_logits.to(torch.float32)
+
+            # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+            lm_logits = lm_logits.to(hidden_states.dtype)
+            loss = loss.to(hidden_states.dtype)
+
+        if not return_dict:
+            output = (lm_logits,) + transformer_outputs[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=lm_logits,
+            past_key_values=transformer_outputs.past_key_values,
+            hidden_states=all_lst_hidden_states,
+            attentions=transformer_outputs.attentions,
+        )
+
