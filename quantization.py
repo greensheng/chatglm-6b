@@ -73,18 +73,6 @@ default_cpu_kernel_code = "QlpoOTFBWSZTWXLbSoQAAgzbgERwQXxmTwAAr/ff3kABt0Q2oRVT0
 default_cpu_parallel_kernel_code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels_parallel.c")
 default_cpu_parallel_kernel_code = "QlpoOTFBWSZTWZzWK2UAALXbgERwSX1mTwAAr/ff3kACNyXSbZYwBpoaNGIyAaADQwRRFT/UKDINANqAD1NABFQlPUzaaJHppGRmoAG01ARKKaaMp4gmgaNAaDQDIKVKfZ/g6v1Kem5ZsWZmZtSXS5ZwRAzKmjr1E1lKMEoQNCPkEYPACgcR5I9w/0k6JrJYHqFuHnChcD7N+DHeOQ0ajF83Tc40jgmQbOB5wt3TEHyTObDBLoxrJGBuJmNbxYZwAoKTjbIcI7GsbuVRERAR8wqwhXQjQOxiHQlgSnHjQjddXERojNmQYJJVoM2xxawMeI9asi6E1rfd7GO8S0S5vacCNGry4F1nyZbcTvSBXEMipuPfM7i0Y8kjirpbxb05jpIQjCGE8DYBNCAZyHz9EoOpDRST/I1aFCNpcjoXgyc3NjVsUvYIaYq7xopYJqcxg2g4qXofm7AaGNTzJSNguOQw4utKcEl0F1UOgI+T1hk5LusbGZ9udC1CiBeGwwFxR/QdbZDndehRPxyGt3Me1DBW45MXIY24ZD30aFNuSEUdu5LWx1sSJWLGgsmqUIFTgWhU0gfxXpzhghr2AYpV3hE06mGk1I2JyuZiFgkiz/i7kinChITmsVso"
 
-try:
-    with open(default_cpu_kernel_code_path, "w", encoding="utf-8") as file:
-        code = default_cpu_kernel_code
-        cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
-        file.write(cpu_quantization_code)
-
-    with open(default_cpu_parallel_kernel_code_path, "w", encoding="utf-8") as file:
-        code = default_cpu_parallel_kernel_code
-        cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
-        file.write(cpu_quantization_code)
-except Exception as ex:
-    print("Error when generating default cpu kernel code(can be ignored when using custom kernels).")
 
 class CPUKernel:
     def __init__(self, kernel_file="", source_code=default_cpu_kernel_code_path, compile_parallel_kernel=None, parallel_num=None):
@@ -93,6 +81,22 @@ class CPUKernel:
         self.int4WeightExtractionFloat = None
         self.int4WeightCompression = None
         self.SetNumThreads = None
+
+        try:
+            if not os.path.exists(default_cpu_kernel_code_path):
+                with open(default_cpu_kernel_code_path, "w", encoding="utf-8") as file:
+                    code = default_cpu_kernel_code
+                    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+                    file.write(cpu_quantization_code)
+
+            if not os.path.exists(default_cpu_parallel_kernel_code_path):
+                with open(default_cpu_parallel_kernel_code_path, "w", encoding="utf-8") as file:
+                    code = default_cpu_parallel_kernel_code
+                    cpu_quantization_code = bz2.decompress(base64.b64decode(code)).decode()
+                    file.write(cpu_quantization_code)
+
+        except Exception as ex:
+            print("Error when generating default cpu kernel code(can be ignored when using custom kernels).")
 
         if compile_parallel_kernel is None:
             compile_parallel_kernel = bool(int(os.cpu_count()) >= 4)
@@ -107,9 +111,11 @@ class CPUKernel:
                     print("Compiling kernels :", source_code)
                     kernel_file = source_code[:-2] + ".so"
                     if compile_parallel_kernel:
-                        os.system("gcc -O3 -pthread -fopenmp {} -shared -o {}".format(source_code, kernel_file))
+                        compile_command = "gcc -O3 -pthread -fopenmp -std=c99 {} -shared -o {}".format(source_code, kernel_file)
                     else:
-                        os.system("gcc -O3 -fPIC {} -shared -o {}".format(source_code, kernel_file))
+                        compile_command = "gcc -O3 -fPIC -std=c99 {} -shared -o {}".format(source_code, kernel_file)
+                    print("Compiling", compile_command)
+                    os.system(compile_command)
                     print("Kernels compiled :", kernel_file)
                 else:
                     print("Kernel source code not found.")
