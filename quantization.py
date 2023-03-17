@@ -112,10 +112,20 @@ class CPUKernel:
                     kernel_file = source_code[:-2] + ".so"
                     if compile_parallel_kernel:
                         compile_command = "gcc -O3 -pthread -fopenmp -std=c99 {} -shared -o {}".format(source_code, kernel_file)
+                        print("Compiling", compile_command)
+                        exit_state = os.system(compile_command)
+                        if exit_state:
+                            print("Compile failed, using default cpu kernel code.")
+                            compile_parallel_kernel = False
+                            source_code = default_cpu_kernel_code_path
+                            kernel_file = source_code[:-2] + ".so"
+                            compile_command = "gcc -O3 -fPIC -std=c99 {} -shared -o {}".format(source_code, kernel_file)
+                            print("Compiling", compile_command)
                     else:
                         compile_command = "gcc -O3 -fPIC -std=c99 {} -shared -o {}".format(source_code, kernel_file)
-                    print("Compiling", compile_command)
-                    os.system(compile_command)
+                        print("Compiling", compile_command)
+                        exit_state = os.system(compile_command)
+
                     print("Kernels compiled :", kernel_file)
                 else:
                     print("Kernel source code not found.")
@@ -129,7 +139,11 @@ class CPUKernel:
             self.int4WeightExtractionFloat = kernels.extract_int4_weight_to_float
             self.int4WeightCompression = kernels.compress_int4_weight
             if compile_parallel_kernel:
-                self.SetNumThreads = kernels.set_num_threads
+                try:
+                    self.SetNumThreads = kernels.set_num_threads
+                except:
+                    print("No set_num_threads() found in kernel.")
+                    self.SetNumThreads = lambda x: x
             self.load = True
             print("Load kernel :", kernel_file)
         else:
