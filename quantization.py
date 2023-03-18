@@ -257,64 +257,40 @@ def extract_weight_to_float(weight: torch.Tensor, scale_list: torch.Tensor, sour
 
     if quantization_cache is not None:
         out = quantization_cache
+        func(
+            ctypes.c_void_p(weight.data_ptr()),
+            ctypes.c_void_p(scale_list.data_ptr()),
+            ctypes.c_void_p(out.data_ptr()),
+            ctypes.c_int32(n),
+            ctypes.c_int32(m)
+        )
+        return out.tensor
     else:
         out = torch.empty(n, m * (8 // source_bit_width), dtype=torch.float, device="cpu")
+        func(
+            ctypes.c_void_p(weight.data_ptr()),
+            ctypes.c_void_p(scale_list.data_ptr()),
+            ctypes.c_void_p(out.data_ptr()),
+            ctypes.c_int32(n),
+            ctypes.c_int32(m)
+        )
+        return out
 
-    func(
-        ctypes.c_void_p(weight.data_ptr()),
-        ctypes.c_void_p(scale_list.data_ptr()),
-        ctypes.c_void_p(out.data_ptr()),
-        ctypes.c_int32(n),
-        ctypes.c_int32(m)
-    )
-    return out
+
+class CacheTensor():
+    def __init__(self, *args, **kwargs):
+        self.tensor = torch.empty(*args, **kwargs)
+    
+    def to(self, *args, **kwargs):
+        self.tensor = self.tensor.to(*args, **kwargs)
+        
+    def data_ptr(self):
+        return self.tensor.data_ptr()
 
 
 class QuantizedLinear(Linear):
     def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, empty_init=False, *args, **kwargs):
         super(QuantizedLinear, self).__init__(*args, **kwargs)
-        self.weight_bit_width = weight_bit_width
-        
-        if quantization_cache is not None:
-            print("QuantizedLinear for CUDA do not support quantization cache.")
-
-        if (quantized_weight is not None) and (quantized_weight_scale is not None):
-            del self.weight
-            self.weight = Parameter(quantized_weight.to(kwargs["device"]), requires_grad=False)
-            self.weight_scale = Parameter(quantized_weight_scale.to(kwargs["device"]), requires_grad=False)
-        else:
-            shape = self.weight.shape
-            del self.weight
-
-            if weight_tensor is None or empty_init:
-                self.weight = torch.empty(
-                    shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
-                )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
-            else:
-                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
-                self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
-                if weight_bit_width == 4:
-                    self.weight = compress_int4_weight(self.weight)
-
-            self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-            self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
-
-        if bias_tensor is not None:
-            self.bias = Parameter(bias_tensor.to(kwargs["device"]), requires_grad=False)
-        else:
-            self.bias = None
-
-    def forward(self, input):
-        output = W8A16Linear.apply(input, self.weight, self.weight_scale, self.weight_bit_width)
-        if self.bias is not None:
-            output = output + self.bias
-        return output
-
-
-class QuantizedLinearCPU(Linear):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, bias_tensor=None, quantized_weight=None, quantized_weight_scale=None, quantization_cache=None, empty_init=False, *args, **kwargs):
-        super(QuantizedLinearCPU, self).__init__(*args, **kwargs)
         self.weight_bit_width = weight_bit_width
         self.quantization_cache = quantization_cache
 
@@ -332,7 +308,7 @@ class QuantizedLinearCPU(Linear):
                 )
                 self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
-                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).float()
+                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).to(kwargs["dtype"])
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
                 if weight_bit_width == 4:
                     self.weight = compress_int4_weight(self.weight)
@@ -345,29 +321,25 @@ class QuantizedLinearCPU(Linear):
         else:
             self.bias = None
 
+    def reset_parameters(self):
+        """To accelerate initialization"""
+        pass
+
     def forward(self, input):
-        output = W8A16LinearCPU.apply(input, self.weight, self.weight_scale, self.weight_bit_width, self.quantization_cache)
+        if self.weight.device == torch.device("cpu"):
+            output = W8A16LinearCPU.apply(input, self.weight, self.weight_scale, self.weight_bit_width, self.quantization_cache)
+        else:
+            output = W8A16Linear.apply(input, self.weight, self.weight_scale, self.weight_bit_width)
         if self.bias is not None:
             output = output + self.bias
         return output
 
-    def _save_to_state_dict(self, destination, prefix, keep_vars):
-        """remove quantization_cache when saving"""
-        if "quantization_cache" in self._parameters:
-            quantization_cache = self._parameters.pop("quantization_cache")
-            super()._save_to_state_dict(destination, prefix, keep_vars)
-            self._parameters["quantization_cache"] = quantization_cache
-        else:
-            super()._save_to_state_dict(destination, prefix, keep_vars)
-
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        """remove quantization_cache when loading"""
-        if "quantization_cache" in self._parameters:
-            quantization_cache = self._parameters.pop("quantization_cache")
-            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
-            self._parameters["quantization_cache"] = quantization_cache
-        else:
-            super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+    def _apply(self, fn):
+        self_obj = super()._apply(fn)
+        if self.quantization_cache is not None:
+            self.quantization_cache.to(self_obj.weight.device)
+            self.quantization_cache.to(self_obj.weight_scale.dtype)
+        return self_obj
 
 
 class QuantizedEmbedding(Embedding):  # TODO: backward, check empty_init
@@ -398,43 +370,10 @@ class QuantizedEmbedding(Embedding):  # TODO: backward, check empty_init
             self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
 
     def forward(self, input):
-        original_weight = extract_weight_to_half(weight=self.weight, scale_list=self.weight_scale, source_bit_width=self.weight_bit_width)
-        output = F.embedding(
-            input, original_weight, self.padding_idx, self.max_norm,
-            self.norm_type, self.scale_grad_by_freq, self.sparse
-        )
-        return output
-
-
-class QuantizedEmbeddingCPU(Embedding):
-    def __init__(self, weight_bit_width: int, weight_tensor=None, quantized_weight=None, quantized_weight_scale=None, empty_init=False, *args, **kwargs):
-        super(QuantizedEmbeddingCPU, self).__init__(*args, **kwargs)
-        self.weight_bit_width = weight_bit_width
-
-        if (quantized_weight is not None) and (quantized_weight_scale is not None):
-            del self.weight
-            self.weight = Parameter(quantized_weight.to(kwargs["device"]), requires_grad=False)
-            self.weight_scale = Parameter(quantized_weight_scale.to(kwargs["device"]), requires_grad=False)
+        if self.weight.device == torch.device("cpu"):
+            original_weight = extract_weight_to_float(weight=self.weight, scale_list=self.weight_scale, source_bit_width=self.weight_bit_width)
         else:
-            shape = self.weight.shape
-            del self.weight
-
-            if weight_tensor is None or empty_init:
-                self.weight = torch.empty(
-                    shape[0], shape[1] * weight_bit_width // 8, dtype=torch.int8, device=kwargs["device"]
-                )
-                self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
-            else:
-                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).float()
-                self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
-                if weight_bit_width == 4:
-                    self.weight = compress_int4_weight(self.weight)
-
-            self.weight = Parameter(self.weight.to(kwargs["device"]), requires_grad=False)
-            self.weight_scale = Parameter(self.weight_scale.to(kwargs["device"]), requires_grad=False)
-
-    def forward(self, input):
-        original_weight = extract_weight_to_float(weight=self.weight, scale_list=self.weight_scale, source_bit_width=self.weight_bit_width)
+            original_weight = extract_weight_to_half(weight=self.weight, scale_list=self.weight_scale, source_bit_width=self.weight_bit_width)
         output = F.embedding(
             input, original_weight, self.padding_idx, self.max_norm,
             self.norm_type, self.scale_grad_by_freq, self.sparse
@@ -456,76 +395,74 @@ def quantize(model, weight_bit_width, use_quantization_cache=False, empty_init=F
     dense_h_to_4h_quantization_cache = None
     dense_4h_to_h_quantization_cache = None
 
-    if model.device == torch.device("cpu"):
+    try:
         load_cpu_kernel(**kwargs)
-        QuantizedLinearAuto = partial(QuantizedLinearCPU, empty_init=empty_init)
-        current_device = torch.device("cpu")
-        dtype = torch.float
-        if use_quantization_cache:
-            print("Using quantization cache")
-            layer = model.layers[0]
-            weight = layer.attention.query_key_value.weight
-            n, m = weight.size(0), weight.size(1)
-            query_key_value_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
-            weight = layer.attention.dense.weight
-            n, m = weight.size(0), weight.size(1)
-            dense_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
-            weight = layer.mlp.dense_h_to_4h.weight
-            n, m = weight.size(0), weight.size(1)
-            dense_h_to_4h_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
-            weight = layer.mlp.dense_4h_to_h.weight
-            n, m = weight.size(0), weight.size(1)
-            dense_4h_to_h_quantization_cache = torch.empty(n, m, dtype=torch.float, device="cpu")
+    except:
+        print("Cannot load cpu kernel, don't use quantized model on cpu.")
 
+    current_device = model.device
+
+    if model.device == torch.device("cpu"):
+        dtype=torch.float32
     else:
-        QuantizedLinearAuto = QuantizedLinear
-        current_device = torch.cuda.current_device()
         dtype = torch.half
+
+    QuantizedLinearWithPara = partial(
+        QuantizedLinear,
+        weight_bit_width=weight_bit_width,
+        bias=True,
+        dtype=dtype,
+        empty_init=empty_init
+    )
+
+    if use_quantization_cache:
+        print("Using quantization cache")
+        layer = model.layers[0]
+        weight = layer.attention.query_key_value.weight
+        n, m = weight.size(0), weight.size(1)
+        query_key_value_quantization_cache = CacheTensor(n, m, dtype=dtype, device=current_device, requires_grad=False)
+        weight = layer.attention.dense.weight
+        n, m = weight.size(0), weight.size(1)
+        dense_quantization_cache = CacheTensor(n, m, dtype=dtype, device=current_device, requires_grad=False)
+        weight = layer.mlp.dense_h_to_4h.weight
+        n, m = weight.size(0), weight.size(1)
+        dense_h_to_4h_quantization_cache = CacheTensor(n, m, dtype=dtype, device=current_device, requires_grad=False)
+        weight = layer.mlp.dense_4h_to_h.weight
+        n, m = weight.size(0), weight.size(1)
+        dense_4h_to_h_quantization_cache = CacheTensor(n, m, dtype=dtype, device=current_device, requires_grad=False)
 
     print("Applying quantization to glm layers")
 
     for layer in model.layers:
-        layer.attention.query_key_value = QuantizedLinearAuto(
-            weight_bit_width=weight_bit_width,
+        layer.attention.query_key_value = QuantizedLinearWithPara(
             weight_tensor=layer.attention.query_key_value.weight.to(current_device),
             bias_tensor=layer.attention.query_key_value.bias,
             in_features=layer.attention.query_key_value.in_features,
             out_features=layer.attention.query_key_value.out_features,
-            bias=True,
-            dtype=dtype,
             device=layer.attention.query_key_value.weight.device,
             quantization_cache=query_key_value_quantization_cache
         )
-        layer.attention.dense = QuantizedLinearAuto(
-            weight_bit_width=weight_bit_width,
+        layer.attention.dense = QuantizedLinearWithPara(
             weight_tensor=layer.attention.dense.weight.to(current_device),
             bias_tensor=layer.attention.dense.bias,
             in_features=layer.attention.dense.in_features,
             out_features=layer.attention.dense.out_features,
-            bias=True,
-            dtype=dtype,
             device=layer.attention.dense.weight.device,
             quantization_cache=dense_quantization_cache
         )
-        layer.mlp.dense_h_to_4h = QuantizedLinearAuto(
-            weight_bit_width=weight_bit_width,
+        layer.mlp.dense_h_to_4h = QuantizedLinearWithPara(
             weight_tensor=layer.mlp.dense_h_to_4h.weight.to(current_device),
             bias_tensor=layer.mlp.dense_h_to_4h.bias,
             in_features=layer.mlp.dense_h_to_4h.in_features,
             out_features=layer.mlp.dense_h_to_4h.out_features,
-            bias=True,
-            dtype=dtype,
             device=layer.mlp.dense_h_to_4h.weight.device,
             quantization_cache=dense_h_to_4h_quantization_cache
         )
-        layer.mlp.dense_4h_to_h = QuantizedLinearAuto(
-            weight_bit_width=weight_bit_width,
+        layer.mlp.dense_4h_to_h = QuantizedLinearWithPara(
             weight_tensor=layer.mlp.dense_4h_to_h.weight.to(current_device),
             bias_tensor=layer.mlp.dense_4h_to_h.bias,
             in_features=layer.mlp.dense_4h_to_h.in_features,
             out_features=layer.mlp.dense_4h_to_h.out_features,
-            bias=True,
-            dtype=dtype,
             device=layer.mlp.dense_4h_to_h.weight.device,
             quantization_cache=dense_4h_to_h_quantization_cache
         )
