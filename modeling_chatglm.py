@@ -184,6 +184,12 @@ class RotaryEmbedding(torch.nn.Module):
             self.cos_cached, self.sin_cached = cos_cached, sin_cached
         return self.cos_cached[:seq_len, ...], self.sin_cached[:seq_len, ...]
 
+    def _apply(self, fn):
+        if self.cos_cached is not None:
+            self.cos_cached = fn(self.cos_cached)
+        if self.sin_cached is not None:
+            self.sin_cached = fn(self.sin_cached)
+        return super()._apply(fn)
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -1174,7 +1180,10 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         return torch.tensor(return_seqs, dtype=torch.long, device=kwargs['input_ids'].device)
 
     def quantize(self, bits: int, quantize_embeddings=False, use_quantization_cache=False, empty_init=False, **kwargs):
-        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, QuantizedEmbeddingCPU, QuantizedLinearCPU, load_cpu_kernel
+        if bits == 0:
+            return
+
+        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, load_cpu_kernel
 
         if self.quantized:
             if self.device == torch.device("cpu"):
@@ -1190,50 +1199,28 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         self.config.quantization_embeddings = quantize_embeddings
 
         self.transformer = quantize(self.transformer, bits, use_quantization_cache=use_quantization_cache, empty_init=empty_init, **kwargs)
+
         if quantize_embeddings:
             logger.info("Applying quantization to embeddings")
-            if self.device == torch.device("cpu"):
-                self.transformer.word_embeddings = QuantizedEmbeddingCPU(
-                    weight_bit_width=bits,
-                    weight_tensor=self.transformer.word_embeddings.weight.to(torch.device("cpu")),
-                    num_embeddings=self.transformer.word_embeddings.num_embeddings,
-                    embedding_dim=self.transformer.word_embeddings.embedding_dim,
-                    dtype=torch.float,
-                    device=self.transformer.word_embeddings.weight.device,
-                )
-                self.lm_head =  QuantizedLinearCPU(
-                    weight_bit_width=bits,
-                    weight_tensor=self.lm_head.weight.to(torch.device("cpu")),
-                    bias_tensor=None,
-                    in_features=self.lm_head.in_features,
-                    out_features=self.lm_head.out_features,
-                    bias=False,
-                    quantized_weight=self.transformer.word_embeddings.weight,
-                    quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
-                    dtype=torch.float,
-                    device=self.lm_head.weight.device,
-                )
-            else:
-                self.transformer.word_embeddings = QuantizedEmbedding(
-                    weight_bit_width=bits,
-                    weight_tensor=self.transformer.word_embeddings.weight.to(torch.cuda.current_device()),
-                    num_embeddings=self.transformer.word_embeddings.num_embeddings,
-                    embedding_dim=self.transformer.word_embeddings.embedding_dim,
-                    dtype=torch.half,
-                    device=self.transformer.word_embeddings.weight.device,
-                )
-
-                self.lm_head = QuantizedLinear(
-                    weight_bit_width=bits,
-                    weight_tensor=self.lm_head.weight.to(torch.cuda.current_device()),
-                    bias_tensor=None,
-                    in_features=self.lm_head.in_features,
-                    out_features=self.lm_head.out_features,
-                    bias=False,
-                    quantized_weight=self.transformer.word_embeddings.weight,
-                    quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
-                    dtype=torch.half,
-                    device=self.lm_head.weight.device,
-                )
+            self.transformer.word_embeddings = QuantizedEmbedding(
+                weight_bit_width=bits,
+                weight_tensor=self.transformer.word_embeddings.weight.to(self.device),
+                num_embeddings=self.transformer.word_embeddings.num_embeddings,
+                embedding_dim=self.transformer.word_embeddings.embedding_dim,
+                dtype=torch.half,
+                device=self.transformer.word_embeddings.weight.device,
+            )
+            self.lm_head =  QuantizedLinear(
+                weight_bit_width=bits,
+                weight_tensor=self.lm_head.weight.to(self.device),
+                bias_tensor=None,
+                in_features=self.lm_head.in_features,
+                out_features=self.lm_head.out_features,
+                bias=False,
+                quantized_weight=self.transformer.word_embeddings.weight,
+                quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
+                dtype=torch.half,
+                device=self.lm_head.weight.device,
+            )
 
         return self
