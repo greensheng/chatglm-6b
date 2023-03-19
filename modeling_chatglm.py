@@ -1223,7 +1223,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                     device=self.transformer.word_embeddings.weight.device,
                 )
 
-                self.lm_head =  QuantizedLinear(
+                self.lm_head = QuantizedLinear(
                     weight_bit_width=bits,
                     weight_tensor=self.lm_head.weight.to(torch.cuda.current_device()),
                     bias_tensor=None,
