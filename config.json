@@ -18,6 +18,8 @@
   "num_attention_heads": 32,
   "num_layers": 28,
   "position_encoding_2d": true,
+  "quantization_bit": 4,
+  "quantization_embeddings": false,
   "torch_dtype": "float16",
   "transformers_version": "4.23.1",
   "use_cache": true,
