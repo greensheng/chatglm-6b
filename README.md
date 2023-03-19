@@ -11,6 +11,10 @@ tags:
 ## 介绍
 ChatGLM-6B 是一个开源的、支持中英双语问答的对话语言模型，基于 [General Language Model (GLM)](https://github.com/THUDM/GLM) 架构，具有 62 亿参数。结合模型量化技术，用户可以在消费级的显卡上进行本地部署（INT4 量化级别下最低只需 6GB 显存）。ChatGLM-6B 使用了和 [ChatGLM](https://chatglm.cn) 相同的技术，针对中文问答和对话进行了优化。经过约 1T 标识符的中英双语训练，辅以监督微调、反馈自助、人类反馈强化学习等技术的加持，62 亿参数的 ChatGLM-6B 已经能生成相当符合人类偏好的回答。
 
+ChatGLM-6B-INT4 是 ChatGLM-6B 量化后的模型权重。具体的， ChatGLM-6B-INT4 对 ChatGLM-6B 中的 28 个 GLM Block 进行了 INT4 量化，没有对 Embedding 和 LM Head 进行量化。量化后的模型理论上仅需 5.2G 内存（使用 CPU 上推理，float）或 4G显存（使用 CUDA 推理，fp16）即可加载，具有在嵌入式设备（如树莓派）上运行的可能。
+
+在 CPU 上运行时，会根据硬件自动编译 CPU Kernel ，请确保已安装 GCC 和 OpenMP （Linux一般已安装，对于Windows则需手动安装），以获得最佳并行计算能力。
+
 ## 软件依赖
 
 ```shell
@@ -23,8 +27,8 @@ pip install protobuf==3.20.0 transformers==4.26.1 icetk cpm_kernels
 
 ```ipython
 >>> from transformers import AutoTokenizer, AutoModel
->>> tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True)
->>> model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True).half().cuda()
+>>> tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm-6b-int4", trust_remote_code=True)
+>>> model = AutoModel.from_pretrained("THUDM/chatglm-6b-int4", trust_remote_code=True).half().cuda()
 >>> response, history = model.chat(tokenizer, "你好", history=[])
 >>> print(response)
 你好👋!我是人工智能助手 ChatGLM-6B,很高兴见到你,欢迎问我任何问题。
