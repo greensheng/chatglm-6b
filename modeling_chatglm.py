@@ -1284,6 +1284,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 num_embeddings=self.transformer.word_embeddings.num_embeddings,
                 embedding_dim=self.transformer.word_embeddings.embedding_dim,
                 dtype=torch.half,
+                empty_init=True,
                 device=self.transformer.word_embeddings.weight.device,
             )
             self.lm_head =  QuantizedLinear(
@@ -1296,6 +1297,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 quantized_weight=self.transformer.word_embeddings.weight,
                 quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
                 dtype=torch.half,
+                empty_init=True,
                 device=self.lm_head.weight.device,
             )
 
