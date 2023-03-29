@@ -192,7 +192,7 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             eop_token='eop',
             mask_token='[MASK]',
             gmask_token='[gMASK]',
-            padding_side="left",
+            padding_side="right",
             **kwargs
     ) -> None:
         super().__init__(
