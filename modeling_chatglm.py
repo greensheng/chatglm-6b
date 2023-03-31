@@ -845,9 +845,8 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
         context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
         if self.position_encoding_2d:
             position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            if not gmask:
-                for i, context_length in enumerate(context_lengths):
-                    position_ids[i, context_length:] = mask_positions[i]
+            for i, context_length in enumerate(context_lengths):
+                position_ids[i, context_length:] = mask_positions[i]
             block_position_ids = [torch.cat((
                 torch.zeros(context_length, dtype=torch.long, device=device),
                 torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
@@ -1053,9 +1052,8 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
         if self.position_encoding_2d:
             position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            if not gmask:
-                for i, context_length in enumerate(context_lengths):
-                    position_ids[i, context_length:] = mask_positions[i]
+            for i, context_length in enumerate(context_lengths):
+                position_ids[i, context_length:] = mask_positions[i]
             block_position_ids = [torch.cat((
                 torch.zeros(context_length, dtype=torch.long, device=device),
                 torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
