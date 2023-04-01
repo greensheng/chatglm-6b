@@ -12,6 +12,8 @@ from transformers.utils import logging
 from typing import List
 from functools import partial
 
+logger = logging.get_logger(__name__)
+
 try:
     from cpm_kernels.kernels.base import LazyKernelCModule, KernelFunction, round_up
 
@@ -68,11 +70,11 @@ class W8A16LinearCPU(torch.autograd.Function):
     @staticmethod
     def forward(ctx, inp: torch.Tensor, quant_w: torch.Tensor, scale_w: torch.Tensor, weight_bit_width, quantization_cache=None):
         ctx.inp_shape = inp.size()
-        ctx.weight_shape = quant_w.size()
         ctx.weight_bit_width = weight_bit_width
         out_features = quant_w.size(0)
         inp = inp.contiguous().view(-1, inp.size(-1))
         weight = extract_weight_to_float(quant_w, scale_w, weight_bit_width, quantization_cache=quantization_cache)
+        ctx.weight_shape = weight.size()
         output = inp.mm(weight.t())
         ctx.save_for_backward(inp, quant_w, scale_w)
         return output.view(*(ctx.inp_shape[:-1] + (out_features,)))
@@ -84,7 +86,7 @@ class W8A16LinearCPU(torch.autograd.Function):
         grad_output = grad_output.contiguous().view(-1, weight.size(0))
         grad_input = grad_output.mm(weight)
         grad_weight = grad_output.t().mm(inp)
-        return grad_input.view(ctx.inp_shape), grad_weight.view(ctx.weight_shape), None
+        return grad_input.view(ctx.inp_shape), grad_weight.view(ctx.weight_shape), None, None
 
 
 default_cpu_kernel_code_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization_kernels.c")
