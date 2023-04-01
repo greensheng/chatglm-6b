@@ -32,6 +32,7 @@ from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaL
 
 from .configuration_chatglm import ChatGLMConfig
 
+
 # flags required to enable jit fusion kernels
 
 if sys.platform != 'darwin':
@@ -223,7 +224,6 @@ class RotaryEmbedding(torch.nn.Module):
         if self.sin_cached is not None:
             self.sin_cached = fn(self.sin_cached)
         return super()._apply(fn)
-
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -1030,7 +1030,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         self.quantized = False
 
         if self.config.quantization_bit:
-            self.quantize(self.config.quantization_bit, empty_init=True)
+            self.quantize(self.config.quantization_bit, self.config.quantization_embeddings, use_quantization_cache=True, empty_init=True)
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -1380,19 +1380,50 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 break
             yield input_ids
 
-    def quantize(self, bits: int, empty_init=False, **kwargs):
+    def quantize(self, bits: int, quantize_embeddings=False, use_quantization_cache=False, empty_init=False, **kwargs):
         if bits == 0:
             return
 
-        from .quantization import quantize
+        from .quantization import quantize, QuantizedEmbedding, QuantizedLinear, load_cpu_kernel
 
         if self.quantized:
-            logger.info("Already quantized.")
+            if self.device == torch.device("cpu"):
+                logger.info("Already quantized, reloading cpu kernel.")
+                load_cpu_kernel(**kwargs)
+            else:
+                logger.info("Already quantized.")
             return self
 
         self.quantized = True
 
         self.config.quantization_bit = bits
+        self.config.quantization_embeddings = quantize_embeddings
 
-        self.transformer = quantize(self.transformer, bits, empty_init=empty_init, **kwargs)
+        self.transformer = quantize(self.transformer, bits, use_quantization_cache=use_quantization_cache, empty_init=empty_init, **kwargs)
+
+        if quantize_embeddings:
+            logger.info("Applying quantization to embeddings")
+            self.transformer.word_embeddings = QuantizedEmbedding(
+                weight_bit_width=bits,
+                weight_tensor=self.transformer.word_embeddings.weight.to(self.device),
+                num_embeddings=self.transformer.word_embeddings.num_embeddings,
+                embedding_dim=self.transformer.word_embeddings.embedding_dim,
+                dtype=torch.half,
+                empty_init=True,
+                device=self.transformer.word_embeddings.weight.device,
+            )
+            self.lm_head =  QuantizedLinear(
+                weight_bit_width=bits,
+                weight_tensor=self.lm_head.weight.to(self.device),
+                bias_tensor=None,
+                in_features=self.lm_head.in_features,
+                out_features=self.lm_head.out_features,
+                bias=False,
+                quantized_weight=self.transformer.word_embeddings.weight,
+                quantized_weight_scale=self.transformer.word_embeddings.weight_scale,
+                dtype=torch.half,
+                empty_init=True,
+                device=self.lm_head.weight.device,
+            )
+
         return self

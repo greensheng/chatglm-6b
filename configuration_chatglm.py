@@ -71,6 +71,7 @@ class ChatGLMConfig(PretrainedConfig):
             inner_hidden_size=16384,
             position_encoding_2d=True,
             quantization_bit=0,
+            quantization_embeddings=False,
             pre_seq_len=None,
             prefix_projection=False,
             **kwargs
@@ -88,6 +89,7 @@ class ChatGLMConfig(PretrainedConfig):
         self.pad_token_id = pad_token_id
         self.position_encoding_2d = position_encoding_2d
         self.quantization_bit = quantization_bit
+        self.quantization_embeddings = quantization_embeddings
         self.pre_seq_len = pre_seq_len
         self.prefix_projection = prefix_projection
 
