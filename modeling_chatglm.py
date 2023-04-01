@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn import CrossEntropyLoss, LayerNorm
 from torch.nn.utils import skip_init
-from typing import Optional, Tuple, Union, List, Callable
+from typing import Optional, Tuple, Union, List, Callable, Dict, Any
 
 from transformers.utils import (
     add_code_sample_docstrings,
@@ -28,7 +28,7 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from transformers.generation.logits_process import LogitsProcessor
-from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList, GenerationConfig
+from transformers.generation.utils import LogitsProcessorList, StoppingCriteriaList, GenerationConfig, ModelOutput
 
 from .configuration_chatglm import ChatGLMConfig
 
@@ -664,6 +664,39 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
         """Initialize the weights."""
         return
 
+    def get_masks(self, input_ids, device):
+        batch_size, seq_length = input_ids.shape
+        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
+        attention_mask = torch.ones((batch_size, seq_length, seq_length), device=device)
+        attention_mask.tril_()
+        for i, context_length in enumerate(context_lengths):
+            attention_mask[i, :, :context_length] = 1
+        attention_mask.unsqueeze_(1)
+        attention_mask = (attention_mask < 0.5).bool()
+
+        return attention_mask
+
+    def get_position_ids(self, input_ids, mask_positions, device, gmask=False):
+        batch_size, seq_length = input_ids.shape
+        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
+        if self.position_encoding_2d:
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
+            for i, context_length in enumerate(context_lengths):
+                position_ids[i, context_length:] = mask_positions[i]
+            block_position_ids = [torch.cat((
+                torch.zeros(context_length, dtype=torch.long, device=device),
+                torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
+            )) for context_length in context_lengths]
+            block_position_ids = torch.stack(block_position_ids, dim=0)
+            position_ids = torch.stack((position_ids, block_position_ids), dim=1)
+        else:
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
+            if not gmask:
+                for i, context_length in enumerate(context_lengths):
+                    position_ids[context_length:] = mask_positions[i]
+
+        return position_ids
+
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, ChatGLMModel):
             module.gradient_checkpointing = value
@@ -827,39 +860,6 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
         past_key_values = past_key_values.permute([2, 1, 0, 3, 4]).split(2)
         # past_key_values = [(v[0], v[1]) for v in past_key_values]
         return past_key_values
-
-    def get_masks(self, input_ids, device):
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
-        attention_mask = torch.ones((batch_size, seq_length, seq_length), device=device)
-        attention_mask.tril_()
-        for i, context_length in enumerate(context_lengths):
-            attention_mask[i, :, :context_length] = 1
-        attention_mask.unsqueeze_(1)
-        attention_mask = (attention_mask < 0.5).bool()
-
-        return attention_mask
-
-    def get_position_ids(self, input_ids, mask_positions, device, gmask=False):
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
-        if self.position_encoding_2d:
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            for i, context_length in enumerate(context_lengths):
-                position_ids[i, context_length:] = mask_positions[i]
-            block_position_ids = [torch.cat((
-                torch.zeros(context_length, dtype=torch.long, device=device),
-                torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
-            )) for context_length in context_lengths]
-            block_position_ids = torch.stack(block_position_ids, dim=0)
-            position_ids = torch.stack((position_ids, block_position_ids), dim=1)
-        else:
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            if not gmask:
-                for i, context_length in enumerate(context_lengths):
-                    position_ids[context_length:] = mask_positions[i]
-
-        return position_ids
 
     @add_start_docstrings_to_model_forward(CHATGLM_6B_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
@@ -1038,35 +1038,39 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def get_masks_and_position_ids(self, input_ids, mask_positions, device, gmask=False):
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
-        attention_mask = torch.ones((batch_size, seq_length, seq_length), device=device)
-        attention_mask.tril_()
-        for i, context_length in enumerate(context_lengths):
-            attention_mask[i, :, :context_length] = 1
-        attention_mask.unsqueeze_(1)
-        attention_mask = (attention_mask < 0.5).bool()
+    def _update_model_kwargs_for_generation(
+        self,
+        outputs: ModelOutput,
+        model_kwargs: Dict[str, Any],
+        is_encoder_decoder: bool = False,
+        standardize_cache_format: bool = False,
+    ) -> Dict[str, Any]:
+        # update past_key_values
+        model_kwargs["past_key_values"] = self._extract_past_from_model_output(
+            outputs, standardize_cache_format=standardize_cache_format
+        )
 
-        batch_size, seq_length = input_ids.shape
-        context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
-        if self.position_encoding_2d:
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            for i, context_length in enumerate(context_lengths):
-                position_ids[i, context_length:] = mask_positions[i]
-            block_position_ids = [torch.cat((
-                torch.zeros(context_length, dtype=torch.long, device=device),
-                torch.arange(seq_length - context_length, dtype=torch.long, device=device) + 1
-            )) for context_length in context_lengths]
-            block_position_ids = torch.stack(block_position_ids, dim=0)
-            position_ids = torch.stack((position_ids, block_position_ids), dim=1)
-        else:
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).expand(batch_size, seq_length)
-            if not gmask:
-                for i, context_length in enumerate(context_lengths):
-                    position_ids[context_length:] = mask_positions[i]
+        # update attention mask
+        if "attention_mask" in model_kwargs:
+            attention_mask = model_kwargs["attention_mask"]
+            attention_mask = torch.cat(
+                [attention_mask, attention_mask.new_ones((*attention_mask.shape[:3], 1))], dim=3)
+            new_attention_mask = attention_mask[:, :, -1:].clone()
+            new_attention_mask[..., -1] = False
+            model_kwargs["attention_mask"] = torch.cat(
+                [attention_mask, new_attention_mask], dim=2
+            )
 
-        return attention_mask, position_ids
+        # update position ids
+        if "position_ids" in model_kwargs:
+            position_ids = model_kwargs["position_ids"]
+            new_position_id = position_ids[..., -1:].clone()
+            new_position_id[:, 1, :] += 1
+            model_kwargs["position_ids"] = torch.cat(
+                [position_ids, new_position_id], dim=-1
+            )
+
+        return model_kwargs
 
     def prepare_inputs_for_generation(
             self,
@@ -1074,6 +1078,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             past: Optional[torch.Tensor] = None,
             past_key_values: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.Tensor] = None,
             **kwargs
     ) -> dict:
         batch_size, seq_length = input_ids.shape
@@ -1085,15 +1090,20 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         # only last token for input_ids if past is not None
         if past is not None or past_key_values is not None:
-            context_lengths = [seq.index(self.config.bos_token_id) for seq in seqs]
             last_token = input_ids[:, -1].unsqueeze(-1)
-            if self.position_encoding_2d:
-                position_ids = torch.tensor(
-                    [[mask_position, seq_length - context_length] for mask_position, context_length in
-                     zip(mask_positions, context_lengths)], dtype=torch.long, device=input_ids.device).unsqueeze(-1)
+            if attention_mask is not None:
+                attention_mask = attention_mask[:, :, -1:]
+            if position_ids is not None:
+                position_ids = position_ids[..., -1:]
             else:
-                position_ids = torch.tensor([mask_position for mask_position in mask_positions], dtype=torch.long,
-                                            device=input_ids.device).unsqueeze(-1)
+                context_lengths = [seq.index(self.config.bos_token_id) for seq in seqs]
+                if self.position_encoding_2d:
+                    position_ids = torch.tensor(
+                        [[mask_position, seq_length - context_length] for mask_position, context_length in
+                         zip(mask_positions, context_lengths)], dtype=torch.long, device=input_ids.device).unsqueeze(-1)
+                else:
+                    position_ids = torch.tensor([mask_position for mask_position in mask_positions], dtype=torch.long,
+                                                device=input_ids.device).unsqueeze(-1)
 
             if past is None:
                 past = past_key_values
@@ -1101,14 +1111,21 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 "input_ids": last_token,
                 "past_key_values": past,
                 "position_ids": position_ids,
+                "attention_mask": attention_mask
             }
         else:
-            attention_mask, position_ids = self.get_masks_and_position_ids(
-                input_ids,
-                mask_positions=mask_positions,
-                device=input_ids.device,
-                gmask=use_gmask
-            )
+            if attention_mask is None:
+                attention_mask = self.get_masks(
+                    input_ids,
+                    device=input_ids.device
+                )
+            if position_ids is None:
+                position_ids = self.get_position_ids(
+                    input_ids,
+                    device=input_ids.device,
+                    mask_positions=mask_positions,
+                    gmask=use_gmask
+                )
 
             return {
                 "input_ids": input_ids,
@@ -1226,10 +1243,10 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             for i, (old_query, response) in enumerate(history):
                 prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
             prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        input_ids = tokenizer([prompt], return_tensors="pt", padding=True)
-        input_ids = input_ids.to(self.device)
-        outputs = self.generate(**input_ids, **gen_kwargs)
-        outputs = outputs.tolist()[0][len(input_ids["input_ids"][0]):]
+        inputs = tokenizer([prompt], return_tensors="pt", padding=True)
+        inputs = inputs.to(self.device)
+        outputs = self.generate(**inputs, **gen_kwargs)
+        outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
         response = tokenizer.decode(outputs)
         response = self.process_response(response)
         history = history + [(query, response)]
@@ -1252,10 +1269,10 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             for i, (old_query, response) in enumerate(history):
                 prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
             prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        input_ids = tokenizer([prompt], return_tensors="pt", padding=True)
-        input_ids = input_ids.to(self.device)
-        for outputs in self.stream_generate(**input_ids, **gen_kwargs):
-            outputs = outputs.tolist()[0][len(input_ids["input_ids"][0]):]
+        inputs = tokenizer([prompt], return_tensors="pt", padding=True)
+        inputs = inputs.to(self.device)
+        for outputs in self.stream_generate(**inputs, **gen_kwargs):
+            outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
             response = tokenizer.decode(outputs)
             response = self.process_response(response)
             new_history = history + [(query, response)]
