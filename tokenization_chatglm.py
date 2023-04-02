@@ -382,8 +382,6 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         mask_token_id = self.sp_tokenizer[self.mask_token]
         gmask_token_id = self.sp_tokenizer[self.gmask_token]
         assert self.padding_side == "left"
-        if return_attention_mask is None:
-            return_attention_mask = "attention_mask" in self.model_input_names
 
         required_input = encoded_inputs[self.model_input_names[0]]
         seq_length = len(required_input)
