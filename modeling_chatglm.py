@@ -919,11 +919,6 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                     device=input_ids.device
                 )
 
-            if self.pre_seq_len is not None:
-                prefix_attention_mask = torch.ones(batch_size, 1, input_ids.size(-1), self.pre_seq_len).to(
-                    attention_mask.device)
-                prefix_attention_mask = (prefix_attention_mask < 0.5).bool()
-                attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=3)
 
             if position_ids is None:
                 MASK, gMASK = 150000, 150001
@@ -937,6 +932,12 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                     device=input_ids.device,
                     gmask=use_gmask
                 )
+
+        if self.pre_seq_len is not None and attention_mask is not None:
+            prefix_attention_mask = torch.ones(batch_size, 1, input_ids.size(-1), self.pre_seq_len).to(
+                attention_mask.device)
+            prefix_attention_mask = (prefix_attention_mask < 0.5).bool()
+            attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=3)
 
         # [seq_len, batch, hidden_size]
         hidden_states = inputs_embeds.transpose(0, 1)
@@ -1053,13 +1054,14 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         # update attention mask
         if "attention_mask" in model_kwargs:
             attention_mask = model_kwargs["attention_mask"]
-            attention_mask = torch.cat(
-                [attention_mask, attention_mask.new_ones((*attention_mask.shape[:3], 1))], dim=3)
-            new_attention_mask = attention_mask[:, :, -1:].clone()
-            new_attention_mask[..., -1] = False
-            model_kwargs["attention_mask"] = torch.cat(
-                [attention_mask, new_attention_mask], dim=2
-            )
+            if attention_mask is not None and attention_mask.dtype == torch.bool:
+                attention_mask = torch.cat(
+                    [attention_mask, attention_mask.new_ones((*attention_mask.shape[:3], 1))], dim=3)
+                new_attention_mask = attention_mask[:, :, -1:].clone()
+                new_attention_mask[..., -1] = False
+                model_kwargs["attention_mask"] = torch.cat(
+                    [attention_mask, new_attention_mask], dim=2
+                )
 
         # update position ids
         if "position_ids" in model_kwargs:
@@ -1091,8 +1093,10 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         # only last token for input_ids if past is not None
         if past is not None or past_key_values is not None:
             last_token = input_ids[:, -1].unsqueeze(-1)
-            if attention_mask is not None:
+            if attention_mask is not None and attention_mask.dtype == torch.bool:
                 attention_mask = attention_mask[:, :, -1:]
+            else:
+                attention_mask = None
             if position_ids is not None:
                 position_ids = position_ids[..., -1:]
             else:
@@ -1114,6 +1118,9 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 "attention_mask": attention_mask
             }
         else:
+            if attention_mask is not None and attention_mask.dtype != torch.bool:
+                logger.warning_once(f"The dtype of attention mask ({attention_mask.dtype}) is not bool")
+                attention_mask = None
             if attention_mask is None:
                 attention_mask = self.get_masks(
                     input_ids,
@@ -1243,7 +1250,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             for i, (old_query, response) in enumerate(history):
                 prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
             prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        inputs = tokenizer([prompt], return_tensors="pt", padding=True)
+        inputs = tokenizer([prompt], return_tensors="pt")
         inputs = inputs.to(self.device)
         outputs = self.generate(**inputs, **gen_kwargs)
         outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
@@ -1269,7 +1276,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             for i, (old_query, response) in enumerate(history):
                 prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
             prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        inputs = tokenizer([prompt], return_tensors="pt", padding=True)
+        inputs = tokenizer([prompt], return_tensors="pt")
         inputs = inputs.to(self.device)
         for outputs in self.stream_generate(**inputs, **gen_kwargs):
             outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
