@@ -261,6 +261,10 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             spaces_between_special_tokens: bool = True,
             **kwargs
     ) -> str:
+        if not isinstance(token_ids, list):
+            token_ids = [token_ids]
+        if len(token_ids) == 0:
+            return ""
         if isinstance(token_ids[0], list):
             tokens = []
             for single_token_ids in token_ids:
