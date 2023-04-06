@@ -921,7 +921,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
 
 
             if position_ids is None:
-                MASK, gMASK = 150000, 150001
+                MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
                 mask_token = MASK if MASK in input_ids else gMASK
                 use_gmask = False if MASK in input_ids else True
 
@@ -1084,7 +1084,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             **kwargs
     ) -> dict:
         batch_size, seq_length = input_ids.shape
-        MASK, gMASK = 150000, 150001
+        MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
         mask_token = MASK if MASK in input_ids else gMASK
         use_gmask = False if MASK in input_ids else True
         seqs = input_ids.tolist()
