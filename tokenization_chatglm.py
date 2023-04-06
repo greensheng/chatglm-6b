@@ -201,6 +201,12 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         """ Initialisation """
 
     @property
+    def gmask_token_id(self) -> Optional[int]:
+        if self.gmask_token is None:
+            return None
+        return self.convert_tokens_to_ids(self.gmask_token)
+
+    @property
     def eop_token_id(self) -> Optional[int]:
         """
         `Optional[int]`: Id of the end of sentence token in the vocabulary. Returns `None` if the token has not been
