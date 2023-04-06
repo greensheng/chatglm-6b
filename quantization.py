@@ -144,6 +144,7 @@ class CPUKernel:
                             kernel_file = source_code[:-2] + ".so"
                             compile_command = "gcc -O3 -fPIC -std=c99 {} -shared -o {}".format(source_code, kernel_file)
                             print("Compiling", compile_command)
+                            exit_state = os.system(compile_command)
                     else:
                         compile_command = "gcc -O3 -fPIC -std=c99 {} -shared -o {}".format(source_code, kernel_file)
                         print("Compiling", compile_command)
