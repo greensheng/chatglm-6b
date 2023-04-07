@@ -369,7 +369,7 @@ class QuantizedEmbedding(Embedding):  # TODO: backward, check empty_init
                 )
                 self.weight_scale = torch.empty(shape[0], dtype=kwargs["dtype"], device=kwargs["device"])
             else:
-                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).half()
+                self.weight_scale = (weight_tensor.abs().max(dim=-1).values / ((2 ** (weight_bit_width - 1)) - 1)).to(kwargs["dtype"])
                 self.weight = torch.round(weight_tensor / self.weight_scale[:, None]).to(torch.int8)
                 if weight_bit_width == 4:
                     self.weight = compress_int4_weight(self.weight)
