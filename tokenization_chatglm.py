@@ -48,11 +48,13 @@ class SPTokenizer:
     def __init__(
             self,
             vocab_file,
+            num_image_tokens=20000,
             max_blank_length=80,
             byte_fallback=True,
     ):
         assert vocab_file is not None
         self.vocab_file = vocab_file
+        self.num_image_tokens = num_image_tokens
         self.special_tokens = ["[MASK]", "[gMASK]", "[sMASK]", "<unused_0>", "<sop>", "<eop>", "<ENC>", "<dBLOCK>"]
         self.max_blank_length = max_blank_length
         self.byte_fallback = byte_fallback
@@ -69,10 +71,6 @@ class SPTokenizer:
     @staticmethod
     def get_tab_token():
         return f"<|tab|>"
-
-    @property
-    def num_image_tokens(self):
-        return 20000
 
     @property
     def num_text_tokens(self):
@@ -178,6 +176,7 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             mask_token='[MASK]',
             gmask_token='[gMASK]',
             padding_side="left",
+            num_image_tokens=20000,
             **kwargs
     ) -> None:
         super().__init__(
@@ -197,9 +196,15 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         self.mask_token = mask_token
         self.gmask_token = gmask_token
 
-        self.sp_tokenizer = SPTokenizer(vocab_file)
+        self.sp_tokenizer = SPTokenizer(vocab_file, num_image_tokens=num_image_tokens)
 
         """ Initialisation """
+
+    @property
+    def gmask_token_id(self) -> Optional[int]:
+        if self.gmask_token is None:
+            return None
+        return self.convert_tokens_to_ids(self.gmask_token)
 
     @property
     def eop_token_id(self) -> Optional[int]:
