@@ -170,9 +170,9 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             vocab_file,
             do_lower_case=False,
             remove_space=False,
-            bos_token='sop',
-            eos_token='eos',
-            eop_token='eop',
+            bos_token='<sop>',
+            eos_token='</s>',
+            eop_token='<eop>',
             mask_token='[MASK]',
             gmask_token='[gMASK]',
             padding_side="left",
@@ -183,6 +183,12 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             do_lower_case=do_lower_case,
             remove_space=remove_space,
             padding_side=padding_side,
+            bos_token=bos_token,
+            eos_token=eos_token,
+            eop_token=eop_token,
+            mask_token=mask_token,
+            gmask_token=gmask_token,
+            num_image_tokens=num_image_tokens,
             **kwargs
         )
 
