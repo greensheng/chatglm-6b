@@ -16,7 +16,7 @@ ChatGLM-6B is an open bilingual language model based on [General Language Model 
 ## 软件依赖
 
 ```shell
-pip install protobuf==3.20.0 transformers==4.27.1 icetk cpm_kernels
+pip install protobuf transformers==4.27.1 cpm_kernels
 ```
 
 ## 代码调用 
