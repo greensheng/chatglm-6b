@@ -171,8 +171,8 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             do_lower_case=False,
             remove_space=False,
             bos_token='<sop>',
-            eos_token='</s>',
-            eop_token='<eop>',
+            eos_token='<eop>',
+            end_token='</s>',
             mask_token='[MASK]',
             gmask_token='[gMASK]',
             padding_side="left",
@@ -185,7 +185,7 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             padding_side=padding_side,
             bos_token=bos_token,
             eos_token=eos_token,
-            eop_token=eop_token,
+            end_token=end_token,
             mask_token=mask_token,
             gmask_token=gmask_token,
             num_image_tokens=num_image_tokens,
@@ -198,7 +198,7 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
 
         self.bos_token = bos_token
         self.eos_token = eos_token
-        self.eop_token = eop_token
+        self.end_token = end_token
         self.mask_token = mask_token
         self.gmask_token = gmask_token
 
@@ -213,14 +213,14 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         return self.convert_tokens_to_ids(self.gmask_token)
 
     @property
-    def eop_token_id(self) -> Optional[int]:
+    def end_token_id(self) -> Optional[int]:
         """
-        `Optional[int]`: Id of the end of sentence token in the vocabulary. Returns `None` if the token has not been
+        `Optional[int]`: Id of the end of context token in the vocabulary. Returns `None` if the token has not been
         set.
         """
-        if self.eop_token is None:
+        if self.end_token is None:
             return None
-        return self.convert_tokens_to_ids(self.eop_token)
+        return self.convert_tokens_to_ids(self.end_token)
 
     @property
     def vocab_size(self):
@@ -324,18 +324,18 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         """
         mask_ids = self.sp_tokenizer[self.mask_token]
         gmask_ids = self.sp_tokenizer[self.gmask_token]
-        eop_id = self.sp_tokenizer[self.eop_token]
+        eos_id = self.sp_tokenizer[self.eos_token]
         if mask_ids not in token_ids_0 and gmask_ids not in token_ids_0:
             token_ids_0 += [gmask_ids]
 
         if token_ids_0[-1] != mask_ids and token_ids_0[-1] != gmask_ids:
-            token_ids_0 += [self.sp_tokenizer[self.eos_token]]
+            token_ids_0 += [self.sp_tokenizer[self.end_token]]
 
         token_ids_0 += [self.sp_tokenizer[self.bos_token]]
 
         if token_ids_1 is not None:
-            if not token_ids_1 or token_ids_1[-1] != eop_id:
-                token_ids_1 += [eop_id]
+            if not token_ids_1 or token_ids_1[-1] != eos_id:
+                token_ids_1 += [eos_id]
             token_ids_0 += token_ids_1
 
         return token_ids_0
