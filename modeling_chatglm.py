@@ -913,6 +913,8 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                 )
                 use_cache = False
 
+        if input_ids is not None and inputs_embeds is not None:
+            logger.warning("You passed both `inputs_embeds` and `input_ids`. Will use `inputs_embeds`")
         if input_ids is not None:
             batch_size, seq_length = input_ids.shape[:2]
         elif inputs_embeds is not None:
