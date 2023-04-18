@@ -970,6 +970,8 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
 
         if attention_mask is None:
             attention_mask = torch.zeros(1, 1, device=input_ids.device).bool()
+        else:
+            attention_mask = attention_mask.to(hidden_states.device)
 
         for i, layer in enumerate(self.layers):
 
