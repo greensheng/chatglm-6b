@@ -384,38 +384,26 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
         # Initialize attention mask if not present.
         if max_length is not None:
             if "attention_mask" not in encoded_inputs:
-                if bos_token_id in required_input:
-                    context_length = required_input.index(bos_token_id)
-                else:
-                    context_length = seq_length
-                attention_mask = np.ones((1, seq_length, seq_length))
-                attention_mask = np.tril(attention_mask)
-                attention_mask[:, :, :context_length] = 1
-                attention_mask = np.bool_(attention_mask < 0.5)
-                encoded_inputs["attention_mask"] = attention_mask
+                encoded_inputs["attention_mask"] = [1] * len(required_input)
 
             if "position_ids" not in encoded_inputs:
                 if bos_token_id in required_input:
                     context_length = required_input.index(bos_token_id)
                 else:
                     context_length = seq_length
-                position_ids = np.arange(seq_length, dtype=np.int64)
-                mask_token = mask_token_id if mask_token_id in required_input else gmask_token_id
+                position_ids = list(range(seq_length))
+                mask_token = gmask_token_id if gmask_token_id in required_input else mask_token_id
                 if mask_token in required_input:
                     mask_position = required_input.index(mask_token)
-                    position_ids[context_length:] = mask_position
-                block_position_ids = np.concatenate(
-                    [np.zeros(context_length, dtype=np.int64),
-                     np.arange(1, seq_length - context_length + 1, dtype=np.int64)])
-                encoded_inputs["position_ids"] = np.stack([position_ids, block_position_ids], axis=0)
+                    position_ids = position_ids[:context_length] + [mask_position] * (seq_length - context_length)
+                block_position_ids = [0] * context_length + list(range(1, seq_length - context_length + 1))
+                encoded_inputs["position_ids"] = [position_ids, block_position_ids]
 
         if needs_to_be_padded:
             difference = max_length - len(required_input)
 
             if "attention_mask" in encoded_inputs:
-                encoded_inputs["attention_mask"] = np.pad(encoded_inputs["attention_mask"],
-                                                          pad_width=[(0, 0), (difference, 0), (difference, 0)],
-                                                          mode='constant', constant_values=True)
+                encoded_inputs["attention_mask"] = [0] * difference + encoded_inputs["attention_mask"]
             if "token_type_ids" in encoded_inputs:
                 encoded_inputs["token_type_ids"] = [self.pad_token_type_id] * difference + encoded_inputs[
                     "token_type_ids"
@@ -423,8 +411,9 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
             if "special_tokens_mask" in encoded_inputs:
                 encoded_inputs["special_tokens_mask"] = [1] * difference + encoded_inputs["special_tokens_mask"]
             if "position_ids" in encoded_inputs:
-                encoded_inputs["position_ids"] = np.pad(encoded_inputs["position_ids"],
-                                                        pad_width=[(0, 0), (difference, 0)])
+                encoded_inputs["position_ids"] = [
+                    [0] * difference + position_id for position_id in encoded_inputs["position_ids"]
+                ]
             encoded_inputs[self.model_input_names[0]] = [self.pad_token_id] * difference + required_input
 
         return encoded_inputs
