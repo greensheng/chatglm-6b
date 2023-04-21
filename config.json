@@ -6,7 +6,8 @@
   "auto_map": {
     "AutoConfig": "configuration_chatglm.ChatGLMConfig",
     "AutoModel": "modeling_chatglm.ChatGLMForConditionalGeneration",
-    "AutoModelForSeq2SeqLM": "modeling_chatglm.ChatGLMForConditionalGeneration"
+    "AutoModelForSeq2SeqLM": "modeling_chatglm.ChatGLMForConditionalGeneration",
+    "AutoModelForSequenceClassification": "modeling_chatglm.ChatGLMForSequenceClassification"
   },
   "bos_token_id": 130004,
   "eos_token_id": 130005,

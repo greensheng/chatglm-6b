@@ -11,7 +11,7 @@ import torch
 import torch.utils.checkpoint
 import torch.nn.functional as F
 from torch import nn
-from torch.nn import CrossEntropyLoss, LayerNorm
+from torch.nn import CrossEntropyLoss, LayerNorm, MSELoss, BCEWithLogitsLoss
 from torch.nn.utils import skip_init
 from typing import Optional, Tuple, Union, List, Callable, Dict, Any
 
@@ -24,6 +24,7 @@ from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
     BaseModelOutputWithPastAndCrossAttentions,
+    SequenceClassifierOutputWithPast
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
@@ -672,6 +673,7 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
 
     def __init__(self, *inputs, **kwargs):
         super().__init__(*inputs, **kwargs)
+        self.quantized = False
 
     def _init_weights(self, module: nn.Module):
         """Initialize the weights."""
@@ -713,6 +715,25 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
                     position_ids[context_length:] = mask_positions[i]
 
         return position_ids
+
+    def quantize(self, bits: int, empty_init=False, **kwargs):
+        if bits == 0:
+            return
+
+        from .quantization import quantize
+
+        if self.quantized:
+            logger.info("Already quantized.")
+            return self
+
+        self.quantized = True
+
+        self.config.quantization_bit = bits
+        if isinstance(self, ChatGLMModel):
+            quantize(self, bits, empty_init=empty_init, **kwargs)
+        elif hasattr(self, "transformer") and isinstance(self.transformer, ChatGLMModel):
+            self.transformer = quantize(self.transformer, bits, empty_init=empty_init, **kwargs)
+        return self
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, ChatGLMModel):
@@ -1062,8 +1083,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         self.config = config
 
-        self.quantized = False
-
         if self.config.quantization_bit:
             self.quantize(self.config.quantization_bit, empty_init=True)
 
@@ -1165,6 +1184,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             input_ids: Optional[torch.Tensor] = None,
             position_ids: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
+            full_attention_mask: Optional[torch.Tensor] = None,
             past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.Tensor] = None,
             labels: Optional[torch.Tensor] = None,
@@ -1180,6 +1200,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
+            full_attention_mask=full_attention_mask,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
@@ -1406,19 +1427,98 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 break
             yield input_ids
 
-    def quantize(self, bits: int, empty_init=False, **kwargs):
-        if bits == 0:
-            return
 
-        from .quantization import quantize
+class ChatGLMForSequenceClassification(ChatGLMPreTrainedModel):
+    def __init__(self, config: ChatGLMConfig, empty_init=True):
+        super().__init__(config)
 
-        if self.quantized:
-            logger.info("Already quantized.")
-            return self
+        self.num_labels = config.num_labels
+        self.position_encoding_2d = config.position_encoding_2d
+        self.transformer = ChatGLMModel(config, empty_init=empty_init)
 
-        self.quantized = True
+        self.classifier_head = nn.Linear(config.hidden_size, config.num_labels, bias=True, dtype=torch.half)
 
-        self.config.quantization_bit = bits
+        self.config = config
 
-        self.transformer = quantize(self.transformer, bits, empty_init=empty_init, **kwargs)
-        return self
+        if self.config.quantization_bit:
+            self.quantize(self.config.quantization_bit, empty_init=True)
+
+    def forward(
+            self,
+            input_ids: Optional[torch.LongTensor] = None,
+            position_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            full_attention_mask: Optional[torch.Tensor] = None,
+            past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]] = None,
+            inputs_embeds: Optional[torch.LongTensor] = None,
+            labels: Optional[torch.LongTensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ) -> Union[Tuple[torch.Tensor, ...], SequenceClassifierOutputWithPast]:
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        transformer_outputs = self.transformer(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            full_attention_mask=full_attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        hidden_states = transformer_outputs[0]
+        if input_ids is not None:
+            batch_size, sequence_length = input_ids.shape[:2]
+            bos_positions = (input_ids == self.config.bos_token_id).long().argmax(dim=1)
+            pooled_hidden_states = hidden_states.permute(1, 0, 2)[torch.arange(batch_size, device=hidden_states.device), bos_positions]
+        else:
+            batch_size, sequence_length = inputs_embeds.shape[:2]
+            logger.warning(
+                f"{self.__class__.__name__} will not detect bos tokens in `inputs_embeds`. Results may be "
+                "unexpected if using bos tokens in conjunction with `inputs_embeds.`"
+            )
+            pooled_hidden_states = hidden_states[:, -1]
+
+        logits = self.classifier_head(pooled_hidden_states)
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze().float(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits.float(), labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels).float(), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits.float(), labels.view(-1, self.num_labels))
+
+        if not return_dict:
+            output = (logits,) + transformer_outputs[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=transformer_outputs.past_key_values,
+            hidden_states=transformer_outputs.hidden_states,
+            attentions=transformer_outputs.attentions,
+        )
