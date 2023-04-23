@@ -566,6 +566,7 @@ class GLMBlock(torch.nn.Module):
             params_dtype=torch.float,
             num_layers=28,
             position_encoding_2d=True,
+            hidden_dropout=None,
             empty_init=True
     ):
         super(GLMBlock, self).__init__()
@@ -591,6 +592,13 @@ class GLMBlock(torch.nn.Module):
         )
 
         # Layernorm on the input data.
+        if hidden_dropout is not None:
+            print(f"Use hidden dropout {hidden_dropout}")
+            self.post_attention_dropout = nn.Dropout(hidden_dropout)
+            self.output_dropout = nn.Dropout(hidden_dropout)
+        else:
+            self.post_attention_dropout = None
+            self.output_dropout = None
         self.post_attention_layernorm = layernorm(hidden_size, eps=layernorm_epsilon)
 
         self.num_layers = num_layers
@@ -641,12 +649,17 @@ class GLMBlock(torch.nn.Module):
 
         # Residual connection.
         alpha = (2 * self.num_layers) ** 0.5
+        if self.post_attention_dropout is not None:
+            attention_output = self.post_attention_dropout(attention_output)
         hidden_states = attention_input * alpha + attention_output
 
         mlp_input = self.post_attention_layernorm(hidden_states)
 
         # MLP.
         mlp_output = self.mlp(mlp_input)
+
+        if self.output_dropout is not None:
+            mlp_output = self.output_dropout(mlp_output)
 
         # Second residual connection.
         output = mlp_input * alpha + mlp_output
@@ -840,6 +853,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
         self.position_encoding_2d = config.position_encoding_2d
         self.pre_seq_len = config.pre_seq_len
         self.prefix_projection = config.prefix_projection
+        self.hidden_dropout = config.hidden_dropout
 
         self.word_embeddings = init_method(
             torch.nn.Embedding,
@@ -860,6 +874,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                 use_bias=True,
                 params_dtype=self.params_dtype,
                 position_encoding_2d=self.position_encoding_2d,
+                hidden_dropout=self.hidden_dropout,
                 empty_init=empty_init
             )
 
@@ -1437,7 +1452,10 @@ class ChatGLMForSequenceClassification(ChatGLMPreTrainedModel):
         self.transformer = ChatGLMModel(config, empty_init=empty_init)
 
         self.classifier_head = nn.Linear(config.hidden_size, config.num_labels, bias=True, dtype=torch.half)
-
+        if config.classifier_dropout is not None:
+            self.dropout = nn.Dropout(config.classifier_dropout)
+        else:
+            self.dropout = None
         self.config = config
 
         if self.config.quantization_bit:
@@ -1485,7 +1503,8 @@ class ChatGLMForSequenceClassification(ChatGLMPreTrainedModel):
                 "unexpected if using bos tokens in conjunction with `inputs_embeds.`"
             )
             pooled_hidden_states = hidden_states[:, -1]
-
+        if self.dropout is not None:
+            pooled_hidden_states = self.dropout(pooled_hidden_states)
         logits = self.classifier_head(pooled_hidden_states)
 
         loss = None

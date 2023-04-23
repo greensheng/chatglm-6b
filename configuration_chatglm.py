@@ -75,6 +75,8 @@ class ChatGLMConfig(PretrainedConfig):
             quantization_bit=0,
             pre_seq_len=None,
             prefix_projection=False,
+            hidden_dropout=None,
+            classifier_dropout=None,
             **kwargs
     ):
         self.num_layers = num_layers
@@ -94,6 +96,8 @@ class ChatGLMConfig(PretrainedConfig):
         self.quantization_bit = quantization_bit
         self.pre_seq_len = pre_seq_len
         self.prefix_projection = prefix_projection
+        self.hidden_dropout = hidden_dropout
+        self.classifier_dropout = classifier_dropout
 
         super().__init__(
             pad_token_id=pad_token_id,
