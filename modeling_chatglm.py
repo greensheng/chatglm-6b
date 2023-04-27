@@ -593,7 +593,6 @@ class GLMBlock(torch.nn.Module):
 
         # Layernorm on the input data.
         if hidden_dropout is not None:
-            print(f"Use hidden dropout {hidden_dropout}")
             self.post_attention_dropout = nn.Dropout(hidden_dropout)
             self.output_dropout = nn.Dropout(hidden_dropout)
         else:
