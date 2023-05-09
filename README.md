@@ -56,6 +56,9 @@ pip install protobuf==3.20.0 transformers==4.27.1 icetk cpm_kernels
 
 For more instructions, including how to run CLI and web demos, and model quantization, please refer to our [Github Repo](https://github.com/THUDM/ChatGLM-6B).
 
+## Change Log
+* v0.1.0 ([f83182](https://huggingface.co/THUDM/chatglm-6b/commit/f83182484538e663a03d3f73647f10f89878f438))
+
 ## 协议
 
 本仓库的代码依照 [Apache-2.0](LICENSE) 协议开源，ChatGLM-6B 模型的权重的使用则需要遵循 [Model License](MODEL_LICENSE)。
