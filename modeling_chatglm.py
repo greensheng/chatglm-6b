@@ -677,13 +677,15 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
         """Initialize the weights."""
         return
 
-    def get_masks(self, input_ids, device):
+    def get_masks(self, input_ids, device, padding_mask=None):
         batch_size, seq_length = input_ids.shape
         context_lengths = [seq.tolist().index(self.config.bos_token_id) for seq in input_ids]
         attention_mask = torch.ones((batch_size, seq_length, seq_length), device=device)
         attention_mask.tril_()
         for i, context_length in enumerate(context_lengths):
             attention_mask[i, :, :context_length] = 1
+        if padding_mask is not None:
+            attention_mask = attention_mask * padding_mask.unsqueeze(1) * padding_mask.unsqueeze(2)
         attention_mask.unsqueeze_(1)
         attention_mask = (attention_mask < 0.5).bool()
 
@@ -891,6 +893,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
             input_ids: Optional[torch.LongTensor] = None,
             position_ids: Optional[torch.LongTensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
+            full_attention_mask: Optional[torch.Tensor] = None,
             past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor], ...]] = None,
             inputs_embeds: Optional[torch.LongTensor] = None,
             use_cache: Optional[bool] = None,
@@ -932,12 +935,12 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
             else:
                 past_key_values = tuple([None] * len(self.layers))
 
-            if attention_mask is None:
-                attention_mask = self.get_masks(
+            if full_attention_mask is None:
+                full_attention_mask = self.get_masks(
                     input_ids,
-                    device=input_ids.device
+                    device=input_ids.device,
+                    padding_mask=attention_mask
                 )
-
 
             if position_ids is None:
                 MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
@@ -956,12 +959,16 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                     device=input_ids.device,
                     use_gmasks=use_gmasks
                 )
+        else:
+            if attention_mask is not None:
+                full_attention_mask = (attention_mask < 0.5).bool()
+                full_attention_mask = full_attention_mask.unsqueeze(1).unsqueeze(1)
 
-        if self.pre_seq_len is not None and attention_mask is not None:
+        if self.pre_seq_len is not None and full_attention_mask is not None:
             prefix_attention_mask = torch.ones(batch_size, 1, input_ids.size(-1), self.pre_seq_len).to(
-                attention_mask.device)
+                full_attention_mask.device)
             prefix_attention_mask = (prefix_attention_mask < 0.5).bool()
-            attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=3)
+            full_attention_mask = torch.cat((prefix_attention_mask, full_attention_mask), dim=3)
 
         # [seq_len, batch, hidden_size]
         hidden_states = inputs_embeds.transpose(0, 1)
@@ -970,10 +977,10 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
         all_self_attentions = () if output_attentions else None
         all_hidden_states = () if output_hidden_states else None
 
-        if attention_mask is None:
-            attention_mask = torch.zeros(1, 1, device=input_ids.device).bool()
+        if full_attention_mask is None:
+            full_attention_mask = torch.zeros(1, 1, device=input_ids.device).bool()
         else:
-            attention_mask = attention_mask.to(hidden_states.device)
+            full_attention_mask = full_attention_mask.to(hidden_states.device)
 
         for i, layer in enumerate(self.layers):
 
@@ -986,7 +993,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                     layer,
                     hidden_states,
                     position_ids,
-                    attention_mask,
+                    full_attention_mask,
                     torch.tensor(i),
                     layer_past,
                     use_cache,
@@ -996,7 +1003,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                 layer_ret = layer(
                     hidden_states,
                     position_ids=position_ids,
-                    attention_mask=attention_mask,
+                    attention_mask=full_attention_mask,
                     layer_id=torch.tensor(i),
                     layer_past=layer_past,
                     use_cache=use_cache,
@@ -1081,14 +1088,9 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         # update attention mask
         if "attention_mask" in model_kwargs:
             attention_mask = model_kwargs["attention_mask"]
-            if attention_mask is not None and attention_mask.dtype == torch.bool:
-                attention_mask = torch.cat(
-                    [attention_mask, attention_mask.new_ones((*attention_mask.shape[:3], 1))], dim=3)
-                new_attention_mask = attention_mask[:, :, -1:].clone()
-                new_attention_mask[..., -1] = False
-                model_kwargs["attention_mask"] = torch.cat(
-                    [attention_mask, new_attention_mask], dim=2
-                )
+            model_kwargs["attention_mask"] = torch.cat(
+                [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+            )
 
         # update position ids
         if "position_ids" in model_kwargs:
@@ -1123,10 +1125,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         # only last token for input_ids if past is not None
         if past is not None or past_key_values is not None:
             last_token = input_ids[:, -1].unsqueeze(-1)
-            if attention_mask is not None and attention_mask.dtype == torch.bool:
-                attention_mask = attention_mask[:, :, -1:]
-            else:
-                attention_mask = None
             if position_ids is not None:
                 position_ids = position_ids[..., -1:]
             else:
@@ -1148,14 +1146,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 "attention_mask": attention_mask
             }
         else:
-            if attention_mask is not None and attention_mask.dtype != torch.bool:
-                logger.warning_once(f"The dtype of attention mask ({attention_mask.dtype}) is not bool")
-                attention_mask = None
-            if attention_mask is None:
-                attention_mask = self.get_masks(
-                    input_ids,
-                    device=input_ids.device
-                )
             if position_ids is None:
                 position_ids = self.get_position_ids(
                     input_ids,
@@ -1163,7 +1153,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                     mask_positions=mask_positions,
                     use_gmasks=use_gmasks
                 )
-
             return {
                 "input_ids": input_ids,
                 "past_key_values": past,
