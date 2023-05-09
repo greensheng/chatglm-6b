@@ -1146,13 +1146,6 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 "attention_mask": attention_mask
             }
         else:
-            if position_ids is None:
-                position_ids = self.get_position_ids(
-                    input_ids,
-                    device=input_ids.device,
-                    mask_positions=mask_positions,
-                    use_gmasks=use_gmasks
-                )
             return {
                 "input_ids": input_ids,
                 "past_key_values": past,
