@@ -691,7 +691,15 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
 
         return attention_mask
 
-    def get_position_ids(self, input_ids, mask_positions, device, use_gmasks=None):
+    def get_position_ids(self, input_ids, device):
+        MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
+        seqs = input_ids.tolist()
+        mask_positions, use_gmasks = [], []
+        for seq in seqs:
+            mask_token = gMASK if gMASK in seq else MASK
+            use_gmask = mask_token == gMASK
+            mask_positions.append(seq.index(mask_token))
+            use_gmasks.append(use_gmask)
         batch_size, seq_length = input_ids.shape
         if use_gmasks is None:
             use_gmasks = [False] * batch_size
@@ -943,21 +951,9 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                 )
 
             if position_ids is None:
-                MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
-                seqs = input_ids.tolist()
-
-                mask_positions, use_gmasks = [], []
-                for seq in seqs:
-                    mask_token = gMASK if gMASK in seq else MASK
-                    use_gmask = mask_token == gMASK
-                    mask_positions.append(seq.index(mask_token))
-                    use_gmasks.append(use_gmask)
-
                 position_ids = self.get_position_ids(
                     input_ids,
-                    mask_positions=mask_positions,
                     device=input_ids.device,
-                    use_gmasks=use_gmasks
                 )
         else:
             if attention_mask is not None:
@@ -1112,30 +1108,12 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             position_ids: Optional[torch.Tensor] = None,
             **kwargs
     ) -> dict:
-        batch_size, seq_length = input_ids.shape
-        MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
-        seqs = input_ids.tolist()
-        mask_positions, use_gmasks = [], []
-        for seq in seqs:
-            mask_token = gMASK if gMASK in seq else MASK
-            use_gmask = mask_token == gMASK
-            mask_positions.append(seq.index(mask_token))
-            use_gmasks.append(use_gmask)
-
         # only last token for input_ids if past is not None
         if past is not None or past_key_values is not None:
             last_token = input_ids[:, -1].unsqueeze(-1)
-            if position_ids is not None:
-                position_ids = position_ids[..., -1:]
-            else:
-                context_lengths = [seq.index(self.config.bos_token_id) for seq in seqs]
-                if self.position_encoding_2d:
-                    position_ids = torch.tensor(
-                        [[mask_position, seq_length - context_length] for mask_position, context_length in
-                         zip(mask_positions, context_lengths)], dtype=torch.long, device=input_ids.device).unsqueeze(-1)
-                else:
-                    position_ids = torch.tensor([mask_position for mask_position in mask_positions], dtype=torch.long,
-                                                device=input_ids.device).unsqueeze(-1)
+            if position_ids is None:
+                position_ids = self.get_position_ids(input_ids, device=input_ids.device)
+            position_ids = position_ids[..., -1:]
 
             if past is None:
                 past = past_key_values
