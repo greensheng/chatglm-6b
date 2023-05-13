@@ -1149,6 +1149,20 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
             response = re.sub(r"%s([\u4e00-\u9fff])" % item[0], r"%s\1" % item[1], response)
         return response
 
+
+    def build_inputs(self, tokenizer, query: str, history: List[Tuple[str, str]] = None):
+        if not history:
+            prompt = query
+        else:
+            prompt = ""
+            for i, (old_query, response) in enumerate(history):
+                prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
+            prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
+        inputs = tokenizer([prompt], return_tensors="pt")
+        inputs = inputs.to(self.device)
+        return inputs
+
+
     @torch.no_grad()
     def chat(self, tokenizer, query: str, history: List[Tuple[str, str]] = None, max_length: int = 2048, num_beams=1,
              do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None, **kwargs):
@@ -1159,15 +1173,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         logits_processor.append(InvalidScoreLogitsProcessor())
         gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
                       "temperature": temperature, "logits_processor": logits_processor, **kwargs}
-        if not history:
-            prompt = query
-        else:
-            prompt = ""
-            for i, (old_query, response) in enumerate(history):
-                prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
-            prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        inputs = tokenizer([prompt], return_tensors="pt")
-        inputs = inputs.to(self.device)
+        inputs = self.build_inputs(tokenizer, query, history=history)
         outputs = self.generate(**inputs, **gen_kwargs)
         outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
         response = tokenizer.decode(outputs)
@@ -1185,15 +1191,7 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         logits_processor.append(InvalidScoreLogitsProcessor())
         gen_kwargs = {"max_length": max_length, "do_sample": do_sample, "top_p": top_p,
                       "temperature": temperature, "logits_processor": logits_processor, **kwargs}
-        if not history:
-            prompt = query
-        else:
-            prompt = ""
-            for i, (old_query, response) in enumerate(history):
-                prompt += "[Round {}]\n问：{}\n答：{}\n".format(i, old_query, response)
-            prompt += "[Round {}]\n问：{}\n答：".format(len(history), query)
-        inputs = tokenizer([prompt], return_tensors="pt")
-        inputs = inputs.to(self.device)
+        inputs = self.build_inputs(tokenizer, query, history=history)
         for outputs in self.stream_generate(**inputs, **gen_kwargs):
             outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
             response = tokenizer.decode(outputs)
