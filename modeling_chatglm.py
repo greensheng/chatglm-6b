@@ -2,10 +2,10 @@
 
 import math
 import copy
-import os
 import warnings
 import re
 import sys
+import requests
 
 import torch
 import torch.utils.checkpoint
@@ -57,6 +57,23 @@ class InvalidScoreLogitsProcessor(LogitsProcessor):
             scores.zero_()
             scores[..., 5] = 5e4
         return scores
+
+
+class ImagePatchEmbedding(torch.nn.Module):
+    def __init__(self, in_channels, hidden_size, patch_size):
+        super().__init__()
+        self.proj = nn.Conv2d(in_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, images):
+        """
+        Input:
+        * images with shape (B, C, H, W)
+        Output:
+        * (batch_size, hidden_size)
+        """
+        embeddings = self.proj(images)
+        embeddings = embeddings.flatten(2).transpose(1, 2)
+        return embeddings
 
 
 class PrefixEncoder(torch.nn.Module):
@@ -851,7 +868,7 @@ class ChatGLMModel(ChatGLMPreTrainedModel):
                 use_cache = False
 
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+            logger.warning_once("Specify both input_ids and inputs_embeds at the same time, will use inputs_embeds")
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape[:2]
         elif inputs_embeds is not None:
@@ -996,11 +1013,11 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
         self.lm_head = new_embeddings
 
     def _update_model_kwargs_for_generation(
-        self,
-        outputs: ModelOutput,
-        model_kwargs: Dict[str, Any],
-        is_encoder_decoder: bool = False,
-        standardize_cache_format: bool = False,
+            self,
+            outputs: ModelOutput,
+            model_kwargs: Dict[str, Any],
+            is_encoder_decoder: bool = False,
+            standardize_cache_format: bool = False,
     ) -> Dict[str, Any]:
         # update past_key_values
         model_kwargs["past_key_values"] = self._extract_past_from_model_output(
@@ -1047,14 +1064,16 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
                 "input_ids": last_token,
                 "past_key_values": past,
                 "position_ids": position_ids,
-                "attention_mask": attention_mask
+                "attention_mask": attention_mask,
+                **kwargs
             }
         else:
             return {
                 "input_ids": input_ids,
                 "past_key_values": past,
                 "position_ids": position_ids,
-                "attention_mask": attention_mask
+                "attention_mask": attention_mask,
+                **kwargs
             }
 
     def forward(
@@ -1317,3 +1336,141 @@ class ChatGLMForConditionalGeneration(ChatGLMPreTrainedModel):
 
         self.transformer = quantize(self.transformer, bits, empty_init=empty_init, **kwargs)
         return self
+
+
+class ChatGLMForConditionalGenerationWithImage(ChatGLMForConditionalGeneration):
+    def __init__(self, config: ChatGLMConfig, empty_init=True):
+        super().__init__(config, empty_init=empty_init)
+        from .visual import BLIP2
+        self.image_encoder = BLIP2(config.eva_config, config.qformer_config)
+        self.image_length = config.image_length
+
+    @staticmethod
+    def process_image(text, image=None):
+        '''Process image in text.
+        Args:
+            text: str, text.
+            image: Optional, image path / url / PIL image.
+        '''
+        from .visual import BlipImageEvalProcessor
+        from PIL import Image
+        from io import BytesIO
+
+        image_position = text.rfind("<img>") + 5
+        # extract path from <img></img> using re
+        image_path = re.findall(r"<img>(.*?)</img>", text)
+        image_path = image_path[-1] if image_path else None
+        if image_path is not None:
+            assert image is None, "image and image_path cannot be both not None."
+            text = text.replace(f"<img>{image_path}</img>", "<img></img>")
+            # url
+            if image_path.startswith("http"):
+                response = requests.get(image_path, timeout=10)
+                image = Image.open(BytesIO(response.content))
+            # local path
+            else:
+                image = Image.open(image_path)
+        if image is not None:
+            processor = BlipImageEvalProcessor(224)
+            image = processor(image.convert('RGB'))
+            image = image.unsqueeze(0)
+        return text, image_position, image
+
+    def build_inputs_with_image(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None):
+        image_path = image_path.strip()
+        if image_path:
+            prompt = "<img>{}</img>".format(image_path)
+        else:
+            prompt = ""
+        for i, (old_query, response) in enumerate(history):  # history removes image urls/paths, while query does not.
+            prompt += "问：{}\n答：{}\n".format(old_query, response)
+        prompt += "问：{}\n答：".format(query)
+        prompt, image_position, torch_image = self.process_image(prompt)
+        if torch_image is not None:
+            torch_image = torch_image.to(self.dtype).to(self.device)
+            input0 = tokenizer.encode(prompt[:image_position], add_special_tokens=False)
+            input1 = [tokenizer.pad_token_id] * self.image_length
+            input2 = tokenizer.encode(prompt[image_position:], add_special_tokens=False)
+            inputs = sum([input0, input1, input2], [])
+            inputs = {
+                "input_ids": torch.tensor([tokenizer.build_inputs_with_special_tokens(inputs)], dtype=torch.long).to(
+                    self.device),
+                "pre_image_length": len(input0),
+                "images": torch_image}
+        else:
+            inputs = tokenizer([prompt], return_tensors="pt")
+            inputs = inputs.to(self.device)
+            inputs["pre_image_length"] = 0
+        return inputs
+
+    @torch.no_grad()
+    def chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None, max_length: int = 2048, num_beams=1,
+             do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None, **kwargs):
+        if history is None:
+            history = []
+        if logits_processor is None:
+            logits_processor = LogitsProcessorList()
+        logits_processor.append(InvalidScoreLogitsProcessor())
+        gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
+                      "temperature": temperature, "logits_processor": logits_processor, **kwargs}
+        inputs = self.build_inputs_with_image(tokenizer, image_path, query, history=history)
+        outputs = self.generate(**inputs, **gen_kwargs)
+        outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
+        response = tokenizer.decode(outputs)
+        response = self.process_response(response)
+        history = history + [(query, response)]
+        return response, history
+
+
+    @torch.no_grad()
+    def stream_chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None, image=None,
+                    max_length: int = 2048, do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None,
+                    **kwargs):
+        if logits_processor is None:
+            logits_processor = LogitsProcessorList()
+        logits_processor.append(InvalidScoreLogitsProcessor())
+        gen_kwargs = {"max_length": max_length, "do_sample": do_sample, "top_p": top_p,
+                      "temperature": temperature, "logits_processor": logits_processor, **kwargs}
+        inputs = self.build_inputs_with_image(tokenizer, image_path, query, history=history)
+        for outputs in self.stream_generate(**inputs, **gen_kwargs):
+            outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
+            response = tokenizer.decode(outputs)
+            response = self.process_response(response)
+            new_history = history + [(query, response)]
+            yield response, new_history
+
+    def forward(
+            self,
+            input_ids: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.Tensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            images: Optional[torch.Tensor] = None,
+            pre_image_length: Optional[int] = None,
+            past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
+            inputs_embeds: Optional[torch.Tensor] = None,
+            labels: Optional[torch.Tensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None,
+    ):
+        if inputs_embeds is None and past_key_values is None and images is not None:
+            image_embeds = self.image_encoder(images)
+            pre_id, pads, post_id = torch.tensor_split(input_ids,
+                                                       [pre_image_length, pre_image_length + self.image_length],
+                                                       dim=1)  # image after [Round 0]\n问：<img>
+            pre_txt_emb = self.transformer.word_embeddings(pre_id)
+            post_txt_emb = self.transformer.word_embeddings(post_id)
+            inputs_embeds = torch.cat([pre_txt_emb, image_embeds, post_txt_emb], dim=1)
+        return super().forward(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            labels=labels,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict
+        )

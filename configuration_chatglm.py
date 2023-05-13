@@ -75,6 +75,9 @@ class ChatGLMConfig(PretrainedConfig):
             quantization_bit=0,
             pre_seq_len=None,
             prefix_projection=False,
+            image_length=32,
+            eva_config=None,
+            qformer_config=None,
             **kwargs
     ):
         self.num_layers = num_layers
@@ -94,6 +97,9 @@ class ChatGLMConfig(PretrainedConfig):
         self.quantization_bit = quantization_bit
         self.pre_seq_len = pre_seq_len
         self.prefix_projection = prefix_projection
+        self.image_length = image_length
+        self.eva_config = eva_config
+        self.qformer_config = qformer_config
 
         super().__init__(
             pad_token_id=pad_token_id,
