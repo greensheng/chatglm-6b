@@ -53,7 +53,7 @@ CHATGLM_6B_PRETRAINED_MODEL_ARCHIVE_LIST = [
 
 class InvalidScoreLogitsProcessor(LogitsProcessor):
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
-        if torch.isnan(scores).any() or torch.isinf(scores).any():
+        if torch.isnan(scores).any():
             scores.zero_()
             scores[..., 5] = 5e4
         return scores
@@ -1389,7 +1389,7 @@ class ChatGLMForConditionalGenerationWithImage(ChatGLMForConditionalGeneration):
         if torch_image is not None:
             torch_image = torch_image.to(self.dtype).to(self.device)
             input0 = tokenizer.encode(prompt[:image_position], add_special_tokens=False)
-            input1 = [tokenizer.pad_token_id] * self.image_length
+            input1 = [tokenizer.unk_token_id] * self.image_length
             input2 = tokenizer.encode(prompt[image_position:], add_special_tokens=False)
             inputs = sum([input0, input1, input2], [])
             inputs = {
@@ -1404,15 +1404,16 @@ class ChatGLMForConditionalGenerationWithImage(ChatGLMForConditionalGeneration):
         return inputs
 
     @torch.no_grad()
-    def chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None, max_length: int = 2048, num_beams=1,
-             do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None, **kwargs):
+    def chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None, max_length: int = 1024,
+             min_length=100, do_sample=True, top_p=0.4, top_k=100, temperature=0.8, repetition_penalty=1.2, logits_processor=None, **kwargs):
         if history is None:
             history = []
         if logits_processor is None:
             logits_processor = LogitsProcessorList()
         logits_processor.append(InvalidScoreLogitsProcessor())
-        gen_kwargs = {"max_length": max_length, "num_beams": num_beams, "do_sample": do_sample, "top_p": top_p,
-                      "temperature": temperature, "logits_processor": logits_processor, **kwargs}
+        gen_kwargs = {"max_length": max_length, "min_length": min_length, "do_sample": do_sample, "top_p": top_p,
+                      "top_k": top_k, "temperature": temperature, "repetition_penalty": repetition_penalty,
+                      "logits_processor": logits_processor, **kwargs}
         inputs = self.build_inputs_with_image(tokenizer, image_path, query, history=history)
         outputs = self.generate(**inputs, **gen_kwargs)
         outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
@@ -1423,14 +1424,17 @@ class ChatGLMForConditionalGenerationWithImage(ChatGLMForConditionalGeneration):
 
 
     @torch.no_grad()
-    def stream_chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None, image=None,
-                    max_length: int = 2048, do_sample=True, top_p=0.7, temperature=0.95, logits_processor=None,
-                    **kwargs):
+    def stream_chat(self, tokenizer, image_path: str, query: str, history: List[Tuple[str, str]] = None,
+                    max_length: int = 1024, min_length=100, do_sample=True, top_p=0.4, top_k=100, temperature=0.8,
+                    repetition_penalty=1.2, logits_processor=None, **kwargs):
+        if history is None:
+            history = []
         if logits_processor is None:
             logits_processor = LogitsProcessorList()
         logits_processor.append(InvalidScoreLogitsProcessor())
-        gen_kwargs = {"max_length": max_length, "do_sample": do_sample, "top_p": top_p,
-                      "temperature": temperature, "logits_processor": logits_processor, **kwargs}
+        gen_kwargs = {"max_length": max_length, "min_length": min_length, "do_sample": do_sample, "top_p": top_p,
+                      "top_k": top_k, "temperature": temperature, "repetition_penalty": repetition_penalty,
+                      "logits_processor": logits_processor, **kwargs}
         inputs = self.build_inputs_with_image(tokenizer, image_path, query, history=history)
         for outputs in self.stream_generate(**inputs, **gen_kwargs):
             outputs = outputs.tolist()[0][len(inputs["input_ids"][0]):]
