@@ -3,8 +3,6 @@ import torch.nn as nn
 
 from sat.model import ViTModel, BaseModel
 from sat.model import BaseMixin
-from sat import AutoModel
-from copy import deepcopy
 from torchvision import transforms
 from torchvision.transforms.functional import InterpolationMode
 
