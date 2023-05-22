@@ -1,5 +1,5 @@
 {
-  "name_or_path": "THUDM/chatglm-6b",
+  "name_or_path": "THUDM/visualglm-6b",
   "bos_token": "<sop>",
   "eos_token": "<eop>",
   "end_token": "</s>",
