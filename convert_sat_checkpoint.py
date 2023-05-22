@@ -1,4 +1,5 @@
 import sys
+import os
 import torch
 from transformers import AutoModel
 
@@ -15,9 +16,5 @@ for old, new in rename_keys:
 del state_dict['transformer.position_embeddings.weight']
 state_dict['lm_head.weight'] = state_dict.pop('mixins.chatglm-final.lm_head.weight')
 
-
-model = AutoModel.from_pretrained("THUDM/chatglm-6b", trust_remote_code=True, revision="visual")
-output = model.load_state_dict(state_dict)
-
-model.save_pretrained(sys.argv[2], max_shard_size="4GB")
+torch.save(state_dict, os.path.join(sys.argv[2], "pytorch_model.bin"))
 
