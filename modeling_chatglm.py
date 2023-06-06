@@ -724,7 +724,7 @@ class ChatGLMPreTrainedModel(PreTrainedModel):
             position_ids = torch.arange(seq_length, dtype=torch.long, device=device).unsqueeze(0).repeat(batch_size, 1)
             for i, context_length in enumerate(context_lengths):
                 if not use_gmasks[i]:
-                    position_ids[context_length:] = mask_positions[i]
+                    position_ids[i, context_length:] = mask_positions[i]
 
         return position_ids
 
